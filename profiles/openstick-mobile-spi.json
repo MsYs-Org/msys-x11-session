@@ -1,0 +1,41 @@
+{
+  "schema": "msys.profile.v1",
+  "id": "openstick-mobile-spi",
+  "roles": {
+    "display-output": ["org.msys.openstick.ch347:x11-spi-touch-output"],
+    "window-policy": [
+      "org.msys.x11.session:window-policy",
+      "org.msys.x11.session:window-policy-python"
+    ],
+    "window-manager": [
+      "org.msys.x11.session:window-policy"
+    ],
+    "hal-manager": [
+      "org.msys.hal.linux:native-manager",
+      "org.msys.hal.linux:manager"
+    ],
+    "launcher": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:launcher"
+    ],
+    "install-agent": ["org.msys.core.install:install-agent"],
+    "update-agent": ["org.msys.core.install:update-agent"]
+  },
+  "startup": [
+    "org.msys.openstick.ch347:x11-spi-touch-output",
+    "org.msys.x11.session:window-policy",
+    "org.msys.hal.linux:native-manager",
+    "org.msys.shell.native:desktop-shell"
+  ],
+  "settings": {
+    "display": ":24",
+    "touch": "ch347",
+    "fps": 60
+  },
+  "env": {
+    "FONTCONFIG_FILE": "/opt/msys/current/msys-x11-session/files/share/fontconfig/msys-fonts.conf",
+    "MSYS_LAYOUT_PROFILE": "mobile",
+    "MSYS_ORIENTATION": "auto",
+    "MSYS_INSETS": "auto"
+  }
+}

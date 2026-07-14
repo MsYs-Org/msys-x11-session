@@ -1,0 +1,32 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.x11.hdmi",
+    "version": "0.1.4",
+    "kind": "driver",
+    "x-msys-template": "promote-to-package-root-before-use"
+  },
+  "components": [
+    {
+      "id": "hdmi-output",
+      "runtime": "shell",
+      "exec": ["bash", "@package/scripts/msys_hdmi_x11_provider.sh"],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "env": {
+        "DISPLAY": ":0",
+        "DISPLAY_ID": ":0",
+        "MSYS_DISPLAY_INPUT_MODE": "none",
+        "MSYS_X11_READY_FILE": "/tmp/msys-x11-hdmi/display-session.json"
+      },
+      "readiness": {"mode": "x11-display", "timeout_ms": 15000},
+      "windowing": {"system": "x11", "display": ":0", "mode": "display-provider"},
+      "provides": [
+        {"role": "display-output", "exclusive": true, "priority": 40, "x-msys-contract": {"id": "org.msys.role.display-output.v1", "version": "1.0.0"}},
+        {"capability": "display.hdmi.x11", "exclusive": false},
+        {"capability": "display.session.v1", "exclusive": false},
+        {"capability": "x11.display.:0", "exclusive": false}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+# Source-control and developer metadata.
+.gitignore
+Makefile
+pyproject.toml
+README.md
+docs/
+manifests/
+
+# Build inputs, outputs, and host-side tests are not target runtime content.
+build/
+dist/
+src/
+tests/
+scripts/build_package.py
+scripts/build_aarch64_j1.sh
+scripts/probe_native_rss.sh
+scripts/test_native_publisher.sh
+bin/test-layout
+bin/test-native-agent
+bin/test-policy-logic
