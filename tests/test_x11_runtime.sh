@@ -19,6 +19,7 @@ xvfb_pid=
 policy_pid=
 fixture_pid=
 overview_pid=
+launcher_guard_pid=
 
 cleanup() {
     if [ -n "$policy_pid" ]; then
@@ -29,6 +30,9 @@ cleanup() {
     fi
     if [ -n "$overview_pid" ]; then
         kill "$overview_pid" 2>/dev/null || true
+    fi
+    if [ -n "$launcher_guard_pid" ]; then
+        kill "$launcher_guard_pid" 2>/dev/null || true
     fi
     if [ -n "$xvfb_pid" ]; then
         kill "$xvfb_pid" 2>/dev/null || true
@@ -126,6 +130,37 @@ if [ "$magic" != "P6" ]; then
     echo "window thumbnail is not a P6 image: $thumbnail" >&2
     exit 1
 fi
+
+# An ordinary launcher is not a compositor.  Once it covers an application,
+# XGetImage on the lower window commonly returns an all-black image.  Preserve
+# that task's last visible snapshot while still allowing the top launcher to
+# get its own preview.
+printf 'P6\n1 1\n255\nRGB' >"$thumbnail"
+cp "$thumbnail" "$TMP/thumbnail-before-launcher.ppm"
+xmessage -title 'MSYS Launcher - Thumbnail Guard' -timeout 30 launcher \
+    >"$TMP/launcher.log" 2>&1 &
+launcher_guard_pid=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    if xwininfo -name 'MSYS Launcher - Thumbnail Guard' 2>/dev/null |
+            grep -q 'Map State: IsViewable'; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.05
+done
+windows=$($BIN --list-windows 2>/dev/null || true)
+case "$windows" in
+    *'"title":"MSYS Launcher - Thumbnail Guard"'*'"kind":"launcher"'*'"state":"visible"'*) ;;
+    *) echo "visible launcher guard was not observed: $windows" >&2; exit 1 ;;
+esac
+if ! cmp -s "$TMP/thumbnail-before-launcher.ppm" "$thumbnail"; then
+    echo "application thumbnail was overwritten behind launcher" >&2
+    exit 1
+fi
+kill "$launcher_guard_pid" 2>/dev/null || true
+wait "$launcher_guard_pid" 2>/dev/null || true
+launcher_guard_pid=
 
 # The task switcher obtains the clean snapshot above before it maps.  Preserve
 # a distinctive valid cached image while the overview covers the application;

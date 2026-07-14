@@ -428,10 +428,11 @@ static void test_thumbnail_scaling_and_rgb_masks(void)
 
 static void test_thumbnail_refresh_is_frozen_behind_task_switcher(void)
 {
-    assert(thumbnail_refresh_allowed(IsViewable, 0));
-    assert(!thumbnail_refresh_allowed(IsViewable, 1));
-    assert(!thumbnail_refresh_allowed(IsUnmapped, 0));
-    assert(!thumbnail_refresh_allowed(IsUnviewable, 0));
+    assert(thumbnail_refresh_allowed(IsViewable, 0, 0));
+    assert(!thumbnail_refresh_allowed(IsViewable, 1, 0));
+    assert(!thumbnail_refresh_allowed(IsViewable, 0, 1));
+    assert(!thumbnail_refresh_allowed(IsUnmapped, 0, 0));
+    assert(!thumbnail_refresh_allowed(IsUnviewable, 0, 0));
 }
 
 int main(void)

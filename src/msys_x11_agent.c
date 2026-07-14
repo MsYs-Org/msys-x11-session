@@ -669,9 +669,18 @@ static char *role_action(struct msys_x11_agent *agent, const char *role,
 
 static char *home_action(struct msys_x11_agent *agent)
 {
-    char *payload = public_payload(public_call(agent, "msys.core",
-            "activate_role", "{\"role\":\"launcher\"}", 8000));
+    char *snapshot;
+    char *payload;
     char *result;
+
+    /* Capture the foreground task while it is still unobscured.  The X11
+     * policy deliberately has no compositor dependency, so once the launcher
+     * is raised XGetImage cannot reliably recover pixels from the window
+     * below it.  The JSON result itself is not needed here. */
+    snapshot = msys_x11_policy_list_windows_json(agent->display);
+    free(snapshot);
+    payload = public_payload(public_call(agent, "msys.core",
+            "activate_role", "{\"role\":\"launcher\"}", 8000));
 
     if (!payload)
         return strdup("{\"ok\":false,\"reason\":\"launcher-activation-failed\"}");

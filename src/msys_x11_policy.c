@@ -1303,12 +1303,16 @@ static int thumbnail_file_available(const char *path)
 }
 
 static int thumbnail_refresh_allowed(int map_state,
-        int task_switcher_visible)
+        int task_switcher_visible, int task_surface_above)
 {
     /* The task switcher asks for one snapshot before mapping itself.  Once it
      * is visible, refreshing from the live root stack can replace that clean
-     * preview with pixels covered by the overview. */
-    return map_state == IsViewable && !task_switcher_visible;
+     * preview with pixels covered by the overview.  Without an X compositor,
+     * XGetImage also returns undefined (commonly black) pixels for a window
+     * covered by another application or the launcher.  Refresh only the
+     * topmost task surface and preserve the last visible snapshot below it. */
+    return map_state == IsViewable && !task_switcher_visible &&
+        !task_surface_above;
 }
 
 static int write_window_thumbnail(Display *display, Window window,
@@ -1404,12 +1408,12 @@ cleanup:
 
 static int window_thumbnail(Display *display, Window window,
         const XWindowAttributes *attributes, int task_switcher_visible,
-        char *path, size_t capacity)
+        int task_surface_above, char *path, size_t capacity)
 {
     if (!thumbnail_path(window, path, capacity))
         return 0;
     if (thumbnail_refresh_allowed(attributes->map_state,
-                task_switcher_visible))
+                task_switcher_visible, task_surface_above))
         (void)write_window_thumbnail(display, window, attributes, path);
     if (!thumbnail_file_available(path)) {
         path[0] = '\0';
@@ -1470,6 +1474,7 @@ static int write_windows_json(FILE *stream, const char *display_name)
     unsigned int i;
     int emitted = 0;
     int task_switcher_visible;
+    int task_surface_seen = 0;
 
     display = open_action_display(display_name);
     if (!display)
@@ -1522,9 +1527,13 @@ static int write_windows_json(FILE *stream, const char *display_name)
         identity = metadata_identity(&metadata);
         component = metadata_component(&metadata);
         state = window_state_name(display, window, &attributes);
-        if (kind == WINDOW_APPLICATION || kind == WINDOW_LAUNCHER)
+        if (kind == WINDOW_APPLICATION || kind == WINDOW_LAUNCHER) {
             (void)window_thumbnail(display, window, &attributes,
-                    task_switcher_visible, thumbnail, sizeof(thumbnail));
+                    task_switcher_visible, task_surface_seen, thumbnail,
+                    sizeof(thumbnail));
+            if (attributes.map_state == IsViewable)
+                task_surface_seen = 1;
+        }
         snprintf(native_id, sizeof(native_id), "0x%lx", (unsigned long)window);
         if (emitted++)
             fputc(',', stream);

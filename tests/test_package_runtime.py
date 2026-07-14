@@ -104,6 +104,22 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertNotIn('execlp("xdotool', source)
         self.assertIn("-ldl", (ROOT / "Makefile").read_text(encoding="utf-8"))
 
+    def test_home_snapshot_precedes_launcher_and_obscured_tasks_keep_cache(self) -> None:
+        agent = (ROOT / "src" / "msys_x11_agent.c").read_text(encoding="utf-8")
+        policy = (ROOT / "src" / "msys_x11_policy.c").read_text(encoding="utf-8")
+        home = agent[agent.index("static char *home_action"):agent.index(
+            "static const char *overlay_method"
+        )]
+        self.assertLess(
+            home.index("msys_x11_policy_list_windows_json"),
+            home.index('"activate_role"'),
+        )
+        self.assertIn("int task_surface_seen = 0;", policy)
+        self.assertIn(
+            "task_switcher_visible, task_surface_seen, thumbnail,", policy
+        )
+        self.assertIn("!task_surface_above", policy)
+
     def test_ch347_wrapper_prefers_a_package_owned_x11display_tree(self) -> None:
         source = (ROOT / "scripts" / "msys_ch347_x11_provider.sh").read_text(
             encoding="utf-8"
