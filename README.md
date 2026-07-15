@@ -61,6 +61,11 @@ the output-only and CH347 direct/XTest modes used by the reference providers.
 The idempotent stack repair includes applications in its ordering audit, then
 raises only system layers; task-switcher therefore cannot remain mapped below
 an application, while an already-correct stack emits no redundant X request.
+Task previews are cached from settled, unobscured application XDamage events.
+This closes the cold-start gap where a toolkit maps before painting its first
+useful frame, without polling screenshots or issuing X rendering/damage of its
+own. Paint bursts are coalesced, and an obscured task keeps its last clean
+preview until it is exposed again.
 The optional `xinput` property-probe mode intentionally falls back to the
 Python publisher rather than adding a subprocess parser to the resident C
 agent.

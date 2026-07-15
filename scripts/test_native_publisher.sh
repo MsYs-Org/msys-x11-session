@@ -22,7 +22,7 @@ Xvfb "$DISPLAY_ID" -screen 0 320x480x24 -nolisten tcp >"$TEMPORARY/xvfb.log" 2>&
 XVFB_PID=$!
 ready=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if DISPLAY="$DISPLAY_ID" xdpyinfo >/dev/null 2>&1; then
+    if DISPLAY="$DISPLAY_ID" timeout 1 xdpyinfo >/dev/null 2>&1; then
         ready=1
         break
     fi

@@ -457,11 +457,29 @@ static void test_thumbnail_scaling_and_rgb_masks(void)
 
 static void test_thumbnail_refresh_is_frozen_behind_task_switcher(void)
 {
+    XWindowAttributes left;
+    XWindowAttributes right;
+
     assert(thumbnail_refresh_allowed(IsViewable, 0, 0));
     assert(!thumbnail_refresh_allowed(IsViewable, 1, 0));
     assert(!thumbnail_refresh_allowed(IsViewable, 0, 1));
     assert(!thumbnail_refresh_allowed(IsUnmapped, 0, 0));
     assert(!thumbnail_refresh_allowed(IsUnviewable, 0, 0));
+    memset(&left, 0, sizeof(left));
+    memset(&right, 0, sizeof(right));
+    left.x = 0;
+    left.y = 42;
+    left.width = 320;
+    left.height = 396;
+    right.x = 0;
+    right.y = 0;
+    right.width = 320;
+    right.height = 42;
+    assert(!thumbnail_rectangles_overlap(&left, &right));
+    right.y = 40;
+    assert(thumbnail_rectangles_overlap(&left, &right));
+    right.x = 320;
+    assert(!thumbnail_rectangles_overlap(&left, &right));
 }
 
 int main(void)

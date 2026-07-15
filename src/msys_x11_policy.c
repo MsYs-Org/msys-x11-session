@@ -44,6 +44,53 @@ static int wm_conflict;
 #define THUMBNAIL_MAX_WIDTH 288
 #define THUMBNAIL_MAX_HEIGHT 360
 #define THUMBNAIL_MAX_FILE_BYTES (2U * 1024U * 1024U)
+#define THUMBNAIL_DAMAGE_SETTLE_MS 40
+#define XDAMAGE_NOTIFY 0
+#define XDAMAGE_REPORT_NON_EMPTY 3
+
+/*
+ * Keep XDamage optional at build time.  The OpenStick image already carries
+ * libXdamage for the SPI capture path, while this small ABI declaration lets
+ * the native policy still build in the isolated SDK runtime without XDamage
+ * development headers.  If the extension/library is absent, list-windows
+ * retains the existing on-demand capture fallback.
+ */
+typedef XID msys_damage_id;
+
+struct msys_xdamage_notify_event {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    Drawable drawable;
+    msys_damage_id damage;
+    int level;
+    Bool more;
+    Time timestamp;
+    XRectangle area;
+    XRectangle geometry;
+};
+
+struct thumbnail_damage_api {
+    void *library;
+    Bool (*query_extension)(Display *, int *, int *);
+    msys_damage_id (*create)(Display *, Drawable, int);
+    void (*destroy)(Display *, msys_damage_id);
+    void (*subtract)(Display *, msys_damage_id, XID, XID);
+    int event_base;
+    int available;
+};
+
+struct thumbnail_damage_watch {
+    Window window;
+    msys_damage_id damage;
+    long long due_ms;
+    int pending;
+    struct thumbnail_damage_watch *next;
+};
+
+static struct thumbnail_damage_api thumbnail_damage_api;
+static struct thumbnail_damage_watch *thumbnail_damage_watches;
 
 static char window_session[80];
 
@@ -51,6 +98,7 @@ static int set_text_property(Display *display, Window window, Atom property,
         const char *text);
 static int request_window_close(Display *display, Window target);
 static long window_wm_state(Display *display, Window window);
+static void thumbnail_damage_watch_window(Display *display, Window window);
 
 struct display_layout_signal {
     int width;
@@ -960,6 +1008,109 @@ static void layout_window(Display *display, Window window,
     free_window_metadata(&metadata);
 }
 
+static int thumbnail_damage_open(Display *display)
+{
+    int error_base;
+
+    memset(&thumbnail_damage_api, 0, sizeof(thumbnail_damage_api));
+    thumbnail_damage_api.library = dlopen("libXdamage.so.1",
+            RTLD_NOW | RTLD_LOCAL);
+    if (!thumbnail_damage_api.library)
+        thumbnail_damage_api.library = dlopen("libXdamage.so",
+                RTLD_NOW | RTLD_LOCAL);
+    if (!thumbnail_damage_api.library)
+        return 0;
+    thumbnail_damage_api.query_extension = dlsym(
+            thumbnail_damage_api.library, "XDamageQueryExtension");
+    thumbnail_damage_api.create = dlsym(thumbnail_damage_api.library,
+            "XDamageCreate");
+    thumbnail_damage_api.destroy = dlsym(thumbnail_damage_api.library,
+            "XDamageDestroy");
+    thumbnail_damage_api.subtract = dlsym(thumbnail_damage_api.library,
+            "XDamageSubtract");
+    if (!thumbnail_damage_api.query_extension ||
+            !thumbnail_damage_api.create ||
+            !thumbnail_damage_api.destroy ||
+            !thumbnail_damage_api.subtract) {
+        dlclose(thumbnail_damage_api.library);
+        memset(&thumbnail_damage_api, 0, sizeof(thumbnail_damage_api));
+        return 0;
+    }
+    /* XDamageQueryExtension may register a close-display hook from the shared
+     * library.  Even when this server lacks DAMAGE, leave it loaded until its
+     * Display has been closed. */
+    if (!thumbnail_damage_api.query_extension(display,
+                &thumbnail_damage_api.event_base, &error_base))
+        return 0;
+    thumbnail_damage_api.available = 1;
+    return 1;
+}
+
+static void thumbnail_damage_watch_window(Display *display, Window window)
+{
+    struct thumbnail_damage_watch *watch;
+
+    if (!thumbnail_damage_api.available)
+        return;
+    for (watch = thumbnail_damage_watches; watch; watch = watch->next) {
+        if (watch->window == window)
+            return;
+    }
+    watch = calloc(1, sizeof(*watch));
+    if (!watch)
+        return;
+    watch->damage = thumbnail_damage_api.create(display, window,
+            XDAMAGE_REPORT_NON_EMPTY);
+    if (watch->damage == None) {
+        free(watch);
+        return;
+    }
+    watch->window = window;
+    watch->next = thumbnail_damage_watches;
+    thumbnail_damage_watches = watch;
+}
+
+static void thumbnail_damage_forget_window(Window window)
+{
+    struct thumbnail_damage_watch **link = &thumbnail_damage_watches;
+
+    while (*link) {
+        struct thumbnail_damage_watch *watch = *link;
+
+        if (watch->window == window) {
+            /* The server destroys a Damage object with its drawable. */
+            *link = watch->next;
+            free(watch);
+            return;
+        }
+        link = &watch->next;
+    }
+}
+
+static void thumbnail_damage_destroy_watches(Display *display)
+{
+    struct thumbnail_damage_watch *watch = thumbnail_damage_watches;
+
+    while (watch) {
+        struct thumbnail_damage_watch *next = watch->next;
+        XWindowAttributes attributes;
+
+        if (thumbnail_damage_api.available &&
+                XGetWindowAttributes(display, watch->window, &attributes))
+            thumbnail_damage_api.destroy(display, watch->damage);
+        free(watch);
+        watch = next;
+    }
+    thumbnail_damage_watches = NULL;
+}
+
+static void thumbnail_damage_close_library(void)
+{
+    if (thumbnail_damage_api.library)
+        dlclose(thumbnail_damage_api.library);
+    memset(&thumbnail_damage_api, 0, sizeof(thumbnail_damage_api));
+}
+
 static void watch_window_metadata(Display *display, Window window)
 {
     XWindowAttributes attributes;
@@ -981,6 +1132,7 @@ static void watch_window_metadata(Display *display, Window window)
     /* Event selections are per X client, so this does not replace the
      * application's own mask. */
     XSelectInput(display, window, PropertyChangeMask);
+    thumbnail_damage_watch_window(display, window);
     window_id = ensure_window_id(display, window);
     free(window_id);
 }
@@ -1484,6 +1636,157 @@ static void remove_window_thumbnail(Window window)
 
     if (thumbnail_path(window, path, sizeof(path)))
         unlink(path);
+}
+
+static int thumbnail_rectangles_overlap(const XWindowAttributes *left,
+        const XWindowAttributes *right)
+{
+    long long left_right = (long long)left->x + left->width;
+    long long left_bottom = (long long)left->y + left->height;
+    long long right_right = (long long)right->x + right->width;
+    long long right_bottom = (long long)right->y + right->height;
+
+    return left->x < right_right && right->x < left_right &&
+        left->y < right_bottom && right->y < left_bottom;
+}
+
+static int thumbnail_window_is_unobscured(Display *display, Window root,
+        Window target, const XWindowAttributes *target_attributes)
+{
+    Window root_return;
+    Window parent_return;
+    Window *children = NULL;
+    unsigned int count = 0;
+    unsigned int target_index = 0;
+    unsigned int i;
+    int found = 0;
+    int unobscured = 1;
+
+    if (!XQueryTree(display, root, &root_return, &parent_return, &children,
+                &count))
+        return 0;
+    for (i = 0; i < count; i++) {
+        if (children[i] == target) {
+            target_index = i;
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        unobscured = 0;
+        goto cleanup;
+    }
+    for (i = 0; i < count; i++) {
+        XWindowAttributes attributes;
+        struct window_metadata metadata;
+        enum window_kind kind;
+
+        if (children[i] == target ||
+                !XGetWindowAttributes(display, children[i], &attributes) ||
+                attributes.map_state != IsViewable ||
+                attributes.class == InputOnly)
+            continue;
+        load_window_metadata(display, children[i], &metadata);
+        kind = classify_window(&metadata);
+        free_window_metadata(&metadata);
+        /* Overview must freeze every task cache, even if a replacement shell
+         * uses a card-sized rather than full-screen task-switcher surface. */
+        if (kind == WINDOW_RECENTS) {
+            unobscured = 0;
+            break;
+        }
+        /* XQueryTree is bottom-to-top.  XGetImage(window) has undefined pixels
+         * wherever a higher top-level window overlaps, so never publish such
+         * a partial/black capture.  Non-overlapping chrome and navigation do
+         * not prevent a workarea application snapshot. */
+        if (i > target_index && thumbnail_rectangles_overlap(
+                    target_attributes, &attributes)) {
+            unobscured = 0;
+            break;
+        }
+    }
+
+cleanup:
+    if (children)
+        XFree(children);
+    return unobscured;
+}
+
+static int thumbnail_damage_event_matches(const XEvent *event)
+{
+    return thumbnail_damage_api.available &&
+        event->type == thumbnail_damage_api.event_base + XDAMAGE_NOTIFY;
+}
+
+static long long thumbnail_monotonic_ms(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return (long long)now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
+}
+
+static void thumbnail_damage_capture_watch(Display *display, Window root,
+        struct thumbnail_damage_watch *watch)
+{
+    XWindowAttributes attributes;
+    struct window_metadata metadata;
+    enum window_kind kind;
+    char path[PATH_MAX];
+
+    if (!XGetWindowAttributes(display, watch->window, &attributes) ||
+            attributes.map_state != IsViewable ||
+            attributes.class == InputOnly)
+        return;
+    load_window_metadata(display, watch->window, &metadata);
+    kind = classify_window(&metadata);
+    free_window_metadata(&metadata);
+    if (kind != WINDOW_APPLICATION && kind != WINDOW_LAUNCHER)
+        return;
+    if (!thumbnail_window_is_unobscured(display, root, watch->window,
+                &attributes) ||
+            !thumbnail_path(watch->window, path, sizeof(path)))
+        return;
+    /* XGetImage is read-only: this updates the PPM task cache without issuing
+     * X rendering, exposure, geometry or stacking requests, hence it cannot
+     * add SPI dirty regions. */
+    (void)write_window_thumbnail(display, watch->window, &attributes, path);
+}
+
+static void thumbnail_damage_flush(Display *display, Window root, int force)
+{
+    struct thumbnail_damage_watch *watch;
+    long long now = thumbnail_monotonic_ms();
+
+    for (watch = thumbnail_damage_watches; watch; watch = watch->next) {
+        if (!watch->pending || (!force && now < watch->due_ms))
+            continue;
+        watch->pending = 0;
+        thumbnail_damage_capture_watch(display, root, watch);
+    }
+}
+
+static void thumbnail_damage_schedule(Display *display, const XEvent *event)
+{
+    const struct msys_xdamage_notify_event *damage_event =
+        (const struct msys_xdamage_notify_event *)event;
+    struct thumbnail_damage_watch *watch;
+
+    for (watch = thumbnail_damage_watches; watch; watch = watch->next) {
+        if (watch->window == damage_event->drawable &&
+                watch->damage == damage_event->damage)
+            break;
+    }
+    if (!watch)
+        return;
+    /* Re-arm immediately so rendering after this request gets another event.
+     * The actual read is settled for a short, event-driven interval: startup
+     * paint bursts become one PPM write, while continuous dragging/animation
+     * never turns into a screenshot loop that competes with the SPI sink. */
+    thumbnail_damage_api.subtract(display, damage_event->damage, None, None);
+    watch->pending = 1;
+    watch->due_ms = thumbnail_monotonic_ms() + THUMBNAIL_DAMAGE_SETTLE_MS;
 }
 
 static int mapped_task_switcher_exists(Display *display, Window *children,
@@ -3020,6 +3323,7 @@ int main(int argc, char **argv)
         XCloseDisplay(display);
         return 2;
     }
+    (void)thumbnail_damage_open(display);
 
     fprintf(stdout,
             "msys-x11-policy: ready display=%s size=%dx%d\n",
@@ -3035,7 +3339,9 @@ int main(int argc, char **argv)
 
     agent_result = msys_x11_agent_start(&agent, display_name);
     if (agent_result != 0) {
+        thumbnail_damage_destroy_watches(display);
         XCloseDisplay(display);
+        thumbnail_damage_close_library();
         return agent_result;
     }
 
@@ -3047,6 +3353,7 @@ int main(int argc, char **argv)
             exit_status = agent_result == 100 ? 0 : agent_result;
             break;
         }
+        thumbnail_damage_flush(display, root, 0);
 
         if (!XPending(display)) {
             struct timespec delay = {0, 10 * 1000 * 1000};
@@ -3057,6 +3364,9 @@ int main(int argc, char **argv)
         XNextEvent(display, &event);
         switch (event.type) {
         case MapRequest:
+            /* Preserve the last settled pixels of the currently unobscured
+             * task before the new top-level surface can cover it. */
+            thumbnail_damage_flush(display, root, 1);
             watch_window_metadata(display, event.xmaprequest.window);
             XMapWindow(display, event.xmaprequest.window);
             layout_window(display, event.xmaprequest.window, &layout_state,
@@ -3137,15 +3447,20 @@ int main(int argc, char **argv)
             }
             break;
         case DestroyNotify:
+            thumbnail_damage_forget_window(event.xdestroywindow.window);
             remove_window_thumbnail(event.xdestroywindow.window);
             break;
         default:
+            if (thumbnail_damage_event_matches(&event))
+                thumbnail_damage_schedule(display, &event);
             break;
         }
         XSync(display, False);
     }
 
     msys_x11_agent_stop(agent);
+    thumbnail_damage_destroy_watches(display);
     XCloseDisplay(display);
+    thumbnail_damage_close_library();
     return exit_status;
 }

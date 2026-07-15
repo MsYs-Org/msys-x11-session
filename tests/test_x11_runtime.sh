@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-for command in Xvfb xdpyinfo xmessage xwininfo; do
+for command in Xvfb xdpyinfo xmessage xwininfo timeout; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "test_x11_runtime: missing $command" >&2
         exit 77
@@ -10,6 +10,7 @@ done
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BIN="$ROOT/bin/msys-x11-policy"
+THUMBNAIL_FIXTURE="$ROOT/bin/thumbnail-late-render-fixture"
 DISPLAY_NUMBER=${MSYS_TEST_DISPLAY_NUMBER:-97}
 export DISPLAY=":$DISPLAY_NUMBER"
 TMP=$(mktemp -d)
@@ -21,6 +22,8 @@ fixture_pid=
 overview_pid=
 launcher_guard_pid=
 late_fixture_pid=
+thumbnail_fixture_pid=
+thumbnail_cover_pid=
 
 cleanup() {
     if [ -n "$policy_pid" ]; then
@@ -38,6 +41,12 @@ cleanup() {
     if [ -n "$late_fixture_pid" ]; then
         kill "$late_fixture_pid" 2>/dev/null || true
     fi
+    if [ -n "$thumbnail_fixture_pid" ]; then
+        kill "$thumbnail_fixture_pid" 2>/dev/null || true
+    fi
+    if [ -n "$thumbnail_cover_pid" ]; then
+        kill "$thumbnail_cover_pid" 2>/dev/null || true
+    fi
     if [ -n "$xvfb_pid" ]; then
         kill "$xvfb_pid" 2>/dev/null || true
     fi
@@ -48,7 +57,7 @@ trap cleanup EXIT INT TERM
 Xvfb "$DISPLAY" -screen 0 800x800x24 -ac -nolisten tcp >"$TMP/xvfb.log" 2>&1 &
 xvfb_pid=$!
 i=0
-until xdpyinfo >/dev/null 2>&1; do
+until timeout 1 xdpyinfo >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -ge 50 ]; then
         cat "$TMP/xvfb.log" >&2
@@ -135,12 +144,105 @@ if [ "$magic" != "P6" ]; then
     exit 1
 fi
 
+# A toolkit may announce readiness after Map but before its first useful
+# frame.  The policy must replace that mapped/background cache when real
+# pixels arrive, then freeze the last clean image while another top-level
+# window obscures it.  This stays event-driven: the fixture emits exactly one
+# XDamage transition for each requested frame.
+"$THUMBNAIL_FIXTURE" >"$TMP/thumbnail-fixture.log" 2>&1 &
+thumbnail_fixture_pid=$!
+thumbnail_native_id=
+i=0
+while [ "$i" -lt 100 ]; do
+    thumbnail_native_id=$(xwininfo -name 'MSYS Late Render Thumbnail Fixture' \
+        2>/dev/null | sed -n 's/.*Window id: \(0x[0-9a-fA-F]*\).*/\1/p')
+    if [ -n "$thumbnail_native_id" ]; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.02
+done
+if [ -z "$thumbnail_native_id" ]; then
+    echo "late-render fixture was not mapped" >&2
+    cat "$TMP/thumbnail-fixture.log" >&2
+    exit 1
+fi
+thumbnail_late="$MSYS_RUNTIME_DIR/window-thumbnails/x11-${thumbnail_native_id#0x}.ppm"
+i=0
+while [ ! -f "$thumbnail_late" ] && [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    sleep 0.02
+done
+if [ ! -f "$thumbnail_late" ]; then
+    echo "mapped-frame XDamage did not create thumbnail: $thumbnail_late" >&2
+    exit 1
+fi
+cp "$thumbnail_late" "$TMP/thumbnail-late-mapped.ppm"
+
+kill -USR1 "$thumbnail_fixture_pid"
+i=0
+while cmp -s "$TMP/thumbnail-late-mapped.ppm" "$thumbnail_late" &&
+        [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    sleep 0.02
+done
+if cmp -s "$TMP/thumbnail-late-mapped.ppm" "$thumbnail_late"; then
+    echo "late first frame did not replace mapped/background thumbnail" >&2
+    exit 1
+fi
+cp "$thumbnail_late" "$TMP/thumbnail-late-visible.ppm"
+
+xmessage -title 'MSYS Launcher - Late Render Cover' -timeout 30 cover \
+    >"$TMP/thumbnail-cover.log" 2>&1 &
+thumbnail_cover_pid=$!
+i=0
+while [ "$i" -lt 100 ]; do
+    if xwininfo -name 'MSYS Launcher - Late Render Cover' 2>/dev/null |
+            grep -q 'Map State: IsViewable'; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.02
+done
+# Let the policy observe MapNotify/stacking before the covered redraw.
+sleep 0.05
+kill -USR2 "$thumbnail_fixture_pid"
+sleep 0.15
+if ! cmp -s "$TMP/thumbnail-late-visible.ppm" "$thumbnail_late"; then
+    echo "obscured late-render thumbnail replaced the last clean frame" >&2
+    exit 1
+fi
+
+kill "$thumbnail_cover_pid" 2>/dev/null || true
+wait "$thumbnail_cover_pid" 2>/dev/null || true
+thumbnail_cover_pid=
+i=0
+while cmp -s "$TMP/thumbnail-late-visible.ppm" "$thumbnail_late" &&
+        [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    sleep 0.02
+done
+if cmp -s "$TMP/thumbnail-late-visible.ppm" "$thumbnail_late"; then
+    echo "thumbnail did not resume after obscuring window closed" >&2
+    exit 1
+fi
+kill "$thumbnail_fixture_pid" 2>/dev/null || true
+wait "$thumbnail_fixture_pid" 2>/dev/null || true
+thumbnail_fixture_pid=
+i=0
+while [ -e "$thumbnail_late" ] && [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    sleep 0.02
+done
+if [ -e "$thumbnail_late" ]; then
+    echo "late-render thumbnail survived window destruction" >&2
+    exit 1
+fi
+
 # An ordinary launcher is not a compositor.  Once it covers an application,
 # XGetImage on the lower window commonly returns an all-black image.  Preserve
 # that task's last visible snapshot while still allowing the top launcher to
 # get its own preview.
-printf 'P6\n1 1\n255\nRGB' >"$thumbnail"
-cp "$thumbnail" "$TMP/thumbnail-before-launcher.ppm"
 xmessage -title 'MSYS Launcher - Thumbnail Guard' -timeout 30 launcher \
     >"$TMP/launcher.log" 2>&1 &
 launcher_guard_pid=$!
@@ -158,6 +260,9 @@ case "$windows" in
     *'"title":"MSYS Launcher - Thumbnail Guard"'*'"kind":"launcher"'*'"state":"visible"'*) ;;
     *) echo "visible launcher guard was not observed: $windows" >&2; exit 1 ;;
 esac
+printf 'P6\n1 1\n255\nRGB' >"$thumbnail"
+cp "$thumbnail" "$TMP/thumbnail-before-launcher.ppm"
+windows=$($BIN --list-windows 2>/dev/null || true)
 if ! cmp -s "$TMP/thumbnail-before-launcher.ppm" "$thumbnail"; then
     echo "application thumbnail was overwritten behind launcher" >&2
     exit 1
@@ -166,11 +271,9 @@ kill "$launcher_guard_pid" 2>/dev/null || true
 wait "$launcher_guard_pid" 2>/dev/null || true
 launcher_guard_pid=
 
-# The task switcher obtains the clean snapshot above before it maps.  Preserve
-# a distinctive valid cached image while the overview covers the application;
-# a buggy refresh would atomically replace these bytes with a new capture.
-printf 'P6\n1 1\n255\nRGB' >"$thumbnail"
-cp "$thumbnail" "$TMP/thumbnail-before-overview.ppm"
+# The task switcher consumes the last clean event-driven snapshot before it
+# maps.  Once Overview is observably mapped, preserve a distinctive cache;
+# redraw/exposure events behind it must not atomically replace these bytes.
 xmessage -title 'MSYS Recents - Thumbnail Guard' -timeout 30 overview \
     >"$TMP/overview.log" 2>&1 &
 overview_pid=$!
@@ -188,6 +291,8 @@ case "$windows" in
     *'"title":"MSYS Recents - Thumbnail Guard"'*'"role":"task-switcher"'*'"state":"visible"'*) ;;
     *) echo "visible task switcher was not observed: $windows" >&2; exit 1 ;;
 esac
+printf 'P6\n1 1\n255\nRGB' >"$thumbnail"
+cp "$thumbnail" "$TMP/thumbnail-before-overview.ppm"
 
 # Mapping a new application while Overview is visible must not place the app
 # above task-switcher.  list-windows is top-to-bottom, so the task-switcher

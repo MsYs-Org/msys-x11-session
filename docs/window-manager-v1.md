@@ -24,12 +24,15 @@ For a mapped application or launcher, the reference X11 provider also writes a
 bounded P6 preview under `$MSYS_RUNTIME_DIR/window-thumbnails` and returns its
 absolute path in the optional `thumbnail` field. The image is atomically
 replaced, never exceeds 288x360 or 2 MiB, and is removed after the X11 window is
-destroyed. While a task-switcher window is mapped, the provider reuses an
-existing preview instead of capturing pixels covered by that overview. A
-missing preview stays absent until the task switcher is hidden. Task switchers
-must therefore treat it as an optional cache: a minimized, legacy, or
-concurrently destroyed window may have no preview and should fall back to its
-application icon.
+destroyed. Settled XDamage events replace an early mapped/background frame once
+the application paints real pixels; startup bursts are coalesced without a
+polling screenshot timer. Capture only occurs while the application is
+unobscured and does not issue any X rendering or display damage. While a
+task-switcher window is mapped, the provider reuses an existing preview instead
+of capturing pixels covered by that overview. A missing preview stays absent
+until the task switcher is hidden. Task switchers must therefore treat it as an
+optional cache: a minimized, legacy, or concurrently destroyed window may have
+no preview and should fall back to its application icon.
 
 The generation prevents X11 resource reuse from redirecting a stale action to
 a different client. Every action verifies that the complete property still
