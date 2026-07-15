@@ -884,6 +884,30 @@ static enum msys_surface_kind surface_for_window_kind(enum window_kind kind)
     }
 }
 
+static int geometry_matches(const XWindowAttributes *attributes,
+        const struct msys_rect *rect)
+{
+    return attributes && rect &&
+        attributes->x == rect->x && attributes->y == rect->y &&
+        attributes->width == rect->width &&
+        attributes->height == rect->height;
+}
+
+static int property_affects_window_metadata(Atom property,
+        const Atom *metadata_properties, size_t count)
+{
+    size_t index;
+
+    if (property == None || metadata_properties == NULL)
+        return 0;
+    for (index = 0; index < count; index++) {
+        if (metadata_properties[index] != None &&
+                property == metadata_properties[index])
+            return 1;
+    }
+    return 0;
+}
+
 static void layout_window(Display *display, Window window,
         const struct msys_layout_state *layout,
         const XConfigureRequestEvent *request)
@@ -919,9 +943,14 @@ static void layout_window(Display *display, Window window,
         : attributes.height;
     msys_layout_place(layout, surface_for_window_kind(kind), &requested,
             &result);
-    XMoveResizeWindow(display, window, result.x, result.y,
-            (unsigned int)result.width, (unsigned int)result.height);
-    XRaiseWindow(display, window);
+    /* Re-sending identical geometry causes real Configure/Expose traffic in
+     * Tk, Qt and Electron.  On the single-bbox SPI path that tiny metadata
+     * event can then be merged with a distant key press into a near-full
+     * refresh.  Stacking is handled explicitly by raise_system_overlays(). */
+    if (!geometry_matches(&attributes, &result)) {
+        XMoveResizeWindow(display, window, result.x, result.y,
+                (unsigned int)result.width, (unsigned int)result.height);
+    }
     free_window_metadata(&metadata);
 }
 
@@ -2747,6 +2776,7 @@ int main(int argc, char **argv)
     Atom layout_config_property;
     Atom layout_effective_property;
     Atom display_layout_property;
+    Atom metadata_properties[10];
     int screen;
     int width;
     int height;
@@ -2937,6 +2967,17 @@ int main(int argc, char **argv)
             LAYOUT_EFFECTIVE_PROPERTY, False);
     display_layout_property = XInternAtom(display, DISPLAY_LAYOUT_PROPERTY,
             False);
+    metadata_properties[0] = XInternAtom(display, "_MSYS_WINDOW_ROLE", False);
+    metadata_properties[1] = XInternAtom(display, "_MSYS_APP_ID", False);
+    metadata_properties[2] = XInternAtom(display, "_MSYS_COMPONENT_ID", False);
+    metadata_properties[3] = XInternAtom(display, "WM_WINDOW_ROLE", False);
+    metadata_properties[4] = XA_WM_CLASS;
+    metadata_properties[5] = XInternAtom(display, "_NET_WM_NAME", False);
+    metadata_properties[6] = XA_WM_NAME;
+    metadata_properties[7] = XInternAtom(display, "_GTK_APPLICATION_ID", False);
+    metadata_properties[8] = XInternAtom(display,
+            "_KDE_NET_WM_DESKTOP_FILE", False);
+    metadata_properties[9] = XInternAtom(display, "_NET_WM_PID", False);
 
     XSetErrorHandler(handle_xerror);
     XSelectInput(display, root, SubstructureRedirectMask |
@@ -3027,7 +3068,12 @@ int main(int argc, char **argv)
                 apply_display_session_property(display, root, &layout_config,
                         layout_effective_property, &layout_state, &width,
                         &height);
-            } else if (event.xproperty.window != root) {
+            } else if (event.xproperty.window != root &&
+                    property_affects_window_metadata(
+                        event.xproperty.atom,
+                        metadata_properties,
+                        sizeof(metadata_properties) /
+                            sizeof(metadata_properties[0]))) {
                 layout_window(display, event.xproperty.window, &layout_state,
                         NULL);
                 raise_system_overlays(display, root);

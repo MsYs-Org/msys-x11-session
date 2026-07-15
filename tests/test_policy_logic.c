@@ -51,6 +51,30 @@ static struct window_metadata metadata(const char *title, const char *wm_class,
     return value;
 }
 
+static void test_metadata_damage_filters(void)
+{
+    const Atom properties[] = {11, 22, None, 44};
+    XWindowAttributes attributes;
+    struct msys_rect rect;
+
+    memset(&attributes, 0, sizeof(attributes));
+    attributes.x = 3;
+    attributes.y = 7;
+    attributes.width = 320;
+    attributes.height = 396;
+    rect.x = 3;
+    rect.y = 7;
+    rect.width = 320;
+    rect.height = 396;
+    assert(geometry_matches(&attributes, &rect));
+    rect.y++;
+    assert(!geometry_matches(&attributes, &rect));
+    assert(property_affects_window_metadata(11, properties, 4));
+    assert(property_affects_window_metadata(44, properties, 4));
+    assert(!property_affects_window_metadata(33, properties, 4));
+    assert(!property_affects_window_metadata(None, properties, 4));
+}
+
 static void test_stable_identity_precedes_title(void)
 {
     struct window_metadata value = metadata("A translated status title",
@@ -437,6 +461,7 @@ static void test_thumbnail_refresh_is_frozen_behind_task_switcher(void)
 
 int main(void)
 {
+    test_metadata_damage_filters();
     test_stable_identity_precedes_title();
     test_all_reference_identities();
     test_explicit_role_supports_replaceable_provider();
