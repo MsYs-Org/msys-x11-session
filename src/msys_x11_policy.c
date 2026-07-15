@@ -908,6 +908,12 @@ static int property_affects_window_metadata(Atom property,
     return 0;
 }
 
+static int overlay_layer_pair_is_ordered(enum window_layer lower,
+        enum window_layer upper)
+{
+    return lower <= upper;
+}
+
 static void layout_window(Display *display, Window window,
         const struct msys_layout_state *layout,
         const XConfigureRequestEvent *request)
@@ -1003,6 +1009,7 @@ static void raise_system_overlays(Display *display, Window root)
     unsigned int layered_count = 0;
     unsigned int i;
     size_t layer_index;
+    int ordered = 1;
 
     if (!XQueryTree(display, root, &root_return, &parent_return, &children,
                 &count))
@@ -1039,6 +1046,23 @@ static void raise_system_overlays(Display *display, Window root)
         layered[layered_count].window = children[i];
         layered[layered_count].layer = layer;
         layered_count++;
+    }
+
+    for (i = 1; i < layered_count; i++) {
+        if (!overlay_layer_pair_is_ordered(
+                layered[i - 1].layer, layered[i].layer)) {
+            ordered = 0;
+            break;
+        }
+    }
+
+    /* XRaiseWindow itself creates ConfigureNotify and damage.  Avoid both
+     * when the tree already follows the declared layer order. */
+    if (ordered) {
+        free(layered);
+        if (children)
+            XFree(children);
+        return;
     }
 
     /* Preserve relative order inside a layer and impose a deterministic order
@@ -2777,6 +2801,7 @@ int main(int argc, char **argv)
     Atom layout_effective_property;
     Atom display_layout_property;
     Atom metadata_properties[10];
+    Atom stacking_properties[2];
     int screen;
     int width;
     int height;
@@ -2978,6 +3003,8 @@ int main(int argc, char **argv)
     metadata_properties[8] = XInternAtom(display,
             "_KDE_NET_WM_DESKTOP_FILE", False);
     metadata_properties[9] = XInternAtom(display, "_NET_WM_PID", False);
+    stacking_properties[0] = XInternAtom(display, "_NET_WM_STATE", False);
+    stacking_properties[1] = XInternAtom(display, "WM_TRANSIENT_FOR", False);
 
     XSetErrorHandler(handle_xerror);
     XSelectInput(display, root, SubstructureRedirectMask |
@@ -3077,6 +3104,13 @@ int main(int argc, char **argv)
                 layout_window(display, event.xproperty.window, &layout_state,
                         NULL);
                 raise_system_overlays(display, root);
+            } else if (event.xproperty.window != root &&
+                    property_affects_window_metadata(
+                        event.xproperty.atom,
+                        stacking_properties,
+                        sizeof(stacking_properties) /
+                            sizeof(stacking_properties[0]))) {
+                raise_system_overlays(display, root);
             }
             break;
         case ConfigureNotify:
@@ -3092,6 +3126,11 @@ int main(int argc, char **argv)
                     apply_display_session_property(display, root,
                             &layout_config, layout_effective_property,
                             &layout_state, &width, &height);
+            } else if (event.xconfigure.window != root) {
+                /* Override-redirect/topmost toolkits are not redirected via
+                 * ConfigureRequest.  Correct only an observed layer inversion;
+                 * the idempotent sorter emits no X request when already valid. */
+                raise_system_overlays(display, root);
             }
             break;
         case DestroyNotify:
