@@ -3375,8 +3375,31 @@ int main(int argc, char **argv)
             break;
         case ConfigureRequest: {
             XConfigureRequestEvent *request = &event.xconfigurerequest;
+            XWindowChanges stacking;
+            unsigned int stacking_mask = 0;
 
             layout_window(display, request->window, &layout_state, request);
+            /*
+             * This process owns SubstructureRedirectMask, so XRaiseWindow
+             * issued by the activation helper arrives here as a
+             * ConfigureRequest instead of changing the server stack.  Honor
+             * only its stacking fields on the WM connection; geometry stays
+             * under the layout contract and system overlays are repaired
+             * immediately afterwards.
+             */
+            memset(&stacking, 0, sizeof(stacking));
+            if (request->value_mask & CWStackMode) {
+                stacking.stack_mode = request->detail;
+                stacking_mask |= CWStackMode;
+            }
+            if ((request->value_mask & CWSibling) &&
+                    (request->value_mask & CWStackMode)) {
+                stacking.sibling = request->above;
+                stacking_mask |= CWSibling;
+            }
+            if (stacking_mask != 0)
+                XConfigureWindow(display, request->window, stacking_mask,
+                        &stacking);
             raise_system_overlays(display, root);
             break;
         }

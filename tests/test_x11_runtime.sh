@@ -267,6 +267,44 @@ if ! cmp -s "$TMP/thumbnail-before-launcher.ppm" "$thumbnail"; then
     echo "application thumbnail was overwritten behind launcher" >&2
     exit 1
 fi
+launcher_window_id=$(printf '%s\n' "$windows" | sed -n \
+    's/.*"id":"\([^"]*\)","window_id":"[^"]*","native_id":[^}]*"title":"MSYS Launcher - Thumbnail Guard".*/\1/p')
+case "$launcher_window_id" in
+    msys.x11-window.v1:*:0x*) ;;
+    *) echo "launcher stable window id was not published: $windows" >&2; exit 1 ;;
+esac
+# The policy owns SubstructureRedirectMask.  A raise from its action helper
+# therefore returns as ConfigureRequest and must be applied by the WM itself.
+# Otherwise Home/focus reports success while the old application stays above
+# the launcher.
+$BIN --window-focus "$window_id"
+i=0
+while [ "$i" -lt 50 ]; do
+    windows=$($BIN --list-windows 2>/dev/null || true)
+    case "$windows" in
+        *'"title":"MSYS-Window-Fixture"'*'"title":"MSYS Launcher - Thumbnail Guard"'*) break ;;
+    esac
+    i=$((i + 1))
+    sleep 0.05
+done
+case "$windows" in
+    *'"title":"MSYS-Window-Fixture"'*'"title":"MSYS Launcher - Thumbnail Guard"'*) ;;
+    *) echo "focused application was not raised: $windows" >&2; exit 1 ;;
+esac
+$BIN --window-focus "$launcher_window_id"
+i=0
+while [ "$i" -lt 50 ]; do
+    windows=$($BIN --list-windows 2>/dev/null || true)
+    case "$windows" in
+        *'"title":"MSYS Launcher - Thumbnail Guard"'*'"title":"MSYS-Window-Fixture"'*) break ;;
+    esac
+    i=$((i + 1))
+    sleep 0.05
+done
+case "$windows" in
+    *'"title":"MSYS Launcher - Thumbnail Guard"'*'"title":"MSYS-Window-Fixture"'*) ;;
+    *) echo "focused launcher was not raised above application: $windows" >&2; exit 1 ;;
+esac
 kill "$launcher_guard_pid" 2>/dev/null || true
 wait "$launcher_guard_pid" 2>/dev/null || true
 launcher_guard_pid=

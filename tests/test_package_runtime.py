@@ -120,6 +120,19 @@ class CanonicalManifestTests(unittest.TestCase):
         )
         self.assertIn("!task_surface_above", policy)
 
+    def test_window_manager_applies_redirected_activation_stacking(self) -> None:
+        policy = (ROOT / "src" / "msys_x11_policy.c").read_text(encoding="utf-8")
+        configure = policy[
+            policy.index("case ConfigureRequest:"):
+            policy.index("case MapNotify:")
+        ]
+        self.assertIn("request->value_mask & CWStackMode", configure)
+        self.assertIn("XConfigureWindow(display, request->window", configure)
+        self.assertLess(
+            configure.index("XConfigureWindow(display, request->window"),
+            configure.index("raise_system_overlays(display, root)"),
+        )
+
     def test_ch347_wrapper_prefers_a_package_owned_x11display_tree(self) -> None:
         source = (ROOT / "scripts" / "msys_ch347_x11_provider.sh").read_text(
             encoding="utf-8"
