@@ -136,6 +136,9 @@ class CanonicalManifestTests(unittest.TestCase):
     def test_back_and_close_active_have_distinct_application_semantics(self) -> None:
         agent = (ROOT / "src" / "msys_x11_agent.c").read_text(encoding="utf-8")
         self.assertIn('"navigation_back", "{}", 1500', agent)
+        self.assertIn('"background_component"', agent)
+        self.assertIn('agent->display, "minimize"', agent)
+        self.assertIn("backgrounded_component", agent)
         self.assertIn('return back_action(agent, 1);', agent)
         self.assertIn('return back_action(agent, 0);', agent)
         self.assertIn('delegated = back_action(agent, 1);', agent)

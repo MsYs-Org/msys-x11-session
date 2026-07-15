@@ -672,6 +672,7 @@ static char *home_action(struct msys_x11_agent *agent)
     char *snapshot;
     char *payload;
     char *result;
+    int ok = 1;
 
     /* Capture the foreground task while it is still unobscured.  The X11
      * policy deliberately has no compositor dependency, so once the launcher
@@ -684,9 +685,10 @@ static char *home_action(struct msys_x11_agent *agent)
 
     if (!payload)
         return strdup("{\"ok\":false,\"reason\":\"launcher-activation-failed\"}");
+    (void)json_get_boolean(payload, "ok", &ok);
     result = format_json(
-            "{\"ok\":true,\"role\":\"launcher\",\"role_activation\":%s}",
-            payload);
+            "{\"ok\":%s,\"role\":\"launcher\",\"role_activation\":%s}",
+            ok ? "true" : "false", payload);
     free(payload);
     return result;
 }
@@ -724,6 +726,20 @@ static int application_back(struct msys_x11_agent *agent, char **detail)
     if (handled)
         return 1;
     return fallback ? 0 : -1;
+}
+
+static char *component_lifecycle_call(struct msys_x11_agent *agent,
+        const char *method, const char *component, int timeout_ms)
+{
+    char *quoted = json_quote(component);
+    char *request = quoted
+        ? format_json("{\"component\":%s}", quoted) : NULL;
+    char *payload = request ? public_payload(public_call(agent,
+            "msys.core", method, request, timeout_ms)) : NULL;
+
+    free(quoted);
+    free(request);
+    return payload;
 }
 
 static char *back_action(struct msys_x11_agent *agent, int navigate_app)
@@ -790,6 +806,80 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
         foreground = foreground_component(agent, component,
                 sizeof(component));
         free(foreground);
+        (void)msys_x11_policy_top_window(agent->display, 0, &window);
+    }
+    if (*component && navigate_app) {
+        char *snapshot;
+        char *background;
+        char *home;
+        char *rollback;
+        char *quoted_component;
+        int home_ok = 0;
+        int action_rc;
+
+        if (strcmp(window.kind, "application") != 0 || !*window.window_id)
+            return strdup("{\"ok\":false,\"reason\":\"managed-window-unavailable\"}");
+
+        /* Save a clean recents thumbnail while the task is still mapped and
+         * unobscured.  Backgrounding is a lifecycle/state operation; the X11
+         * minimize below is intentionally separate and rollbackable. */
+        snapshot = msys_x11_policy_list_windows_json(agent->display);
+        free(snapshot);
+        background = component_lifecycle_call(agent, "background_component",
+                component, 4000);
+        if (!background)
+            return strdup("{\"ok\":false,\"reason\":\"component-background-failed\"}");
+
+        action_rc = msys_x11_policy_window_action(agent->display, "minimize",
+                window.window_id, 0, 0, 0, 0);
+        if (action_rc != 0) {
+            rollback = component_lifecycle_call(agent, "start", component,
+                    8000);
+            quoted_component = json_quote(component);
+            result = quoted_component ? format_json(
+                    "{\"ok\":false,\"reason\":\"window-minimize-failed\","
+                    "\"component\":%s,\"returncode\":%d,"
+                    "\"background\":%s,\"rollback\":%s}",
+                    quoted_component, action_rc, background,
+                    rollback ? rollback : "{\"ok\":false}") : NULL;
+            free(quoted_component);
+            free(background);
+            free(rollback);
+            return result;
+        }
+
+        home = home_action(agent);
+        if (home)
+            (void)json_get_boolean(home, "ok", &home_ok);
+        if (!home_ok) {
+            rollback = component_lifecycle_call(agent, "start", component,
+                    8000);
+            quoted_component = json_quote(component);
+            result = quoted_component ? format_json(
+                    "{\"ok\":false,\"reason\":\"home-activation-failed\","
+                    "\"component\":%s,\"background\":%s,\"home\":%s,"
+                    "\"rollback\":%s}", quoted_component, background,
+                    home ? home : "{\"ok\":false}",
+                    rollback ? rollback : "{\"ok\":false}") : NULL;
+            free(quoted_component);
+            free(background);
+            free(home);
+            free(rollback);
+            return result;
+        }
+
+        quoted_component = json_quote(component);
+        quoted = json_quote(window.window_id);
+        result = quoted_component && quoted ? format_json(
+                "{\"ok\":true,\"destination\":\"home\","
+                "\"backgrounded_component\":%s,\"window_id\":%s,"
+                "\"background\":%s,\"home\":%s}",
+                quoted_component, quoted, background, home) : NULL;
+        free(quoted_component);
+        free(quoted);
+        free(background);
+        free(home);
+        return result;
     }
     if (*component) {
         char *quoted_component = json_quote(component);
@@ -842,6 +932,36 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
     if (msys_x11_policy_top_window(agent->display, 0, &window) != 1 ||
             !*window.window_id)
         return strdup("{\"ok\":false,\"reason\":\"no-user-window\"}");
+    if (navigate_app) {
+        char *snapshot = msys_x11_policy_list_windows_json(agent->display);
+        char *home;
+        int home_ok = 0;
+
+        free(snapshot);
+        if (msys_x11_policy_window_action(agent->display, "minimize",
+                    window.window_id, 0, 0, 0, 0) != 0)
+            return strdup("{\"ok\":false,\"reason\":\"x11-action-failed\"}");
+        home = home_action(agent);
+        if (home)
+            (void)json_get_boolean(home, "ok", &home_ok);
+        if (!home_ok) {
+            (void)msys_x11_policy_window_action(agent->display, "focus",
+                    window.window_id, 0, 0, 0, 0);
+            result = home ? format_json(
+                    "{\"ok\":false,\"reason\":\"home-activation-failed\","
+                    "\"home\":%s}", home) : NULL;
+            free(home);
+            return result;
+        }
+        quoted = json_quote(window.window_id);
+        result = quoted ? format_json(
+                "{\"ok\":true,\"destination\":\"home\","
+                "\"backgrounded_window\":%s,\"home\":%s}",
+                quoted, home) : NULL;
+        free(quoted);
+        free(home);
+        return result;
+    }
     if (msys_x11_policy_window_action(agent->display, "close",
                 window.window_id, 0, 0, 0, 0) != 0)
         return strdup("{\"ok\":false,\"reason\":\"x11-action-failed\"}");

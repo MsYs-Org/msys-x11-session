@@ -3,7 +3,7 @@
   "package": {
     "id": "org.msys.x11.session",
     "name": "MSYS X11 Session",
-    "version": "0.2.11",
+    "version": "0.2.12",
     "kind": "system",
     "vendor": "MSYS",
     "summary": "Native X11 window policy and replaceable display-session providers"

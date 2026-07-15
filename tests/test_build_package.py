@@ -27,7 +27,7 @@ class PackageBuilderTests(unittest.TestCase):
         version = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))[
             "package"
         ]["version"]
-        self.assertEqual(version, "0.2.11")
+        self.assertEqual(version, "0.2.12")
         self.assertIn(
             f"PACKAGE_VERSION := {version}",
             (ROOT / "Makefile").read_text(encoding="utf-8"),
@@ -58,7 +58,7 @@ class PackageBuilderTests(unittest.TestCase):
             binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
 
             archive = BUILD_PACKAGE.build(fixture)
-            self.assertEqual(archive.name, "org.msys.x11.session-0.2.11.tar.gz")
+            self.assertEqual(archive.name, "org.msys.x11.session-0.2.12.tar.gz")
             with tarfile.open(archive, "r:gz") as bundle:
                 names = set(bundle.getnames())
                 self.assertIn("manifest.json", names)

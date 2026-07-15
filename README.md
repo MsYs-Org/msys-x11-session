@@ -54,7 +54,12 @@ swipe/drag injection, with no xdotool runtime dependency.
 The native provider implements `get_display_session`, `get_layout`,
 `set_layout`, `list_windows`, `recents`, `activate_component`, Home, Back,
 Apps, `close_active`, and generation-checked typed window actions. Native
-`list_windows`/`recents` currently expose the real X11 role stack; a supervised
+Back keeps a root-page application alive: it records the task as background,
+captures its clean preview, minimizes its surface, and activates Home. Only
+the explicit close methods stop a supervised component; failed Back
+transactions restore the original component instead of leaving split Core/X11
+state. `list_windows`/`recents` currently expose the real X11 role stack; a
+supervised
 component which is ready but has not mapped its first surface is only added by
 the Python compatibility provider. Native display-session publication covers
 the output-only and CH347 direct/XTest modes used by the reference providers.
@@ -84,7 +89,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.8.tar.gz
+make package             # dist/org.msys.x11.session-0.2.12.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 

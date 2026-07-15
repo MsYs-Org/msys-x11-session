@@ -131,11 +131,16 @@ navigation_back({}) -> { handled: false }  # application root page
 ```
 
 `handled:true` leaves lifecycle and stacking unchanged. At the root page, the
-policy refreshes Core's foreground stack, restores the exact previous task, or
-activates the selected launcher when the stack is empty. A declared navigation
-provider which times out or returns an invalid reply fails closed; the
-application is not killed. Overlay-only Back returns immediately after
-dismissing one layer and never changes the application destination.
+policy refreshes Core's foreground stack, asks Core to mark that component
+`background`, captures its unobscured task preview, minimizes its X11 surface,
+and activates the selected launcher. The process remains alive and the task
+remains in Recents; Back never restores a different task and never calls
+`stop`, `WM_DELETE_WINDOW`, or `XKillClient`. Only an explicit `close_active`
+or `close_window` terminates an application. A failed minimize/Home transaction
+best-effort starts and focuses the original component again. A declared
+navigation provider which times out or returns an invalid reply fails closed.
+Overlay-only Back returns immediately after dismissing one layer and never
+changes the application destination.
 
 Back examines the real top-to-bottom X11 role stack and dismisses exactly one
 top-most overlay before touching an application:

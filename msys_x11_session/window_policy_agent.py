@@ -1068,7 +1068,7 @@ def activate_launcher_home() -> dict[str, Any]:
     }
 
 
-def complete_managed_back(component: str, title: str) -> dict[str, Any]:
+def complete_managed_close(component: str, title: str) -> dict[str, Any]:
     """Restore the next Core surface, or Home, after a successful stop.
 
     This transaction must run outside the provider's private-channel reader.
@@ -1152,6 +1152,142 @@ def complete_managed_back(component: str, title: str) -> dict[str, Any]:
         "destination": "home",
         "home": home,
         **({} if home.get("ok") is True else {"reason": "home-activation-failed"}),
+    }
+
+
+def restore_backgrounded_component(component: str) -> dict[str, Any]:
+    """Best-effort rollback when a Back transaction cannot reach Home."""
+
+    try:
+        response = MsysClient.public_call(
+            "msys.core",
+            "start",
+            {"component": component},
+            timeout=8,
+        )
+    except Exception as exc:
+        return {"ok": False, "reason": "component-restore-failed", "error": str(exc)}
+    if not isinstance(response, dict) or response.get("type") != "return":
+        return {
+            "ok": False,
+            "reason": "component-restore-failed",
+            "error": (
+                response.get("message") or response.get("code") or "start failed"
+                if isinstance(response, dict)
+                else "start returned a non-object"
+            ),
+        }
+    payload = response.get("payload", {})
+    result = dict(payload) if isinstance(payload, Mapping) else {}
+    activation = result.get("activation", {})
+    if isinstance(activation, Mapping) and activation.get("ok") is False:
+        return {**result, "ok": False, "reason": "component-activation-failed"}
+    if result.get("activation_error"):
+        return {**result, "ok": False, "reason": "component-activation-failed"}
+    return {"ok": True, **result}
+
+
+def background_managed_back(
+    component: str,
+    title: str,
+    window: XWindow | None,
+) -> dict[str, Any]:
+    """Keep a managed app alive, minimize its surface, then reveal Home."""
+
+    base: dict[str, Any] = {
+        "component": component,
+        "title": title,
+    }
+    if window is None or not window.window_id:
+        return {**base, "ok": False, "reason": "managed-window-unavailable"}
+
+    try:
+        response = MsysClient.public_call(
+            "msys.core",
+            "background_component",
+            {"component": component},
+            timeout=4,
+        )
+    except Exception as exc:
+        response = {
+            "type": "error",
+            "code": "COMPONENT_BACKGROUND_FAILED",
+            "message": str(exc),
+        }
+    if not isinstance(response, dict) or response.get("type") != "return":
+        return {
+            **base,
+            "ok": False,
+            "reason": "component-background-failed",
+            "error": (
+                response.get("message") or response.get("code") or "background failed"
+                if isinstance(response, dict)
+                else "background returned a non-object"
+            ),
+        }
+    raw_background = response.get("payload", {})
+    background = dict(raw_background) if isinstance(raw_background, Mapping) else {}
+
+    minimized = window_action("minimize", window.window_id)
+    if minimized.get("ok") is not True:
+        return {
+            **base,
+            "ok": False,
+            "reason": "window-minimize-failed",
+            "background": background,
+            "minimize": minimized,
+            "rollback": restore_backgrounded_component(component),
+        }
+
+    home = activate_launcher_home()
+    if home.get("ok") is not True:
+        return {
+            **base,
+            "ok": False,
+            "reason": "home-activation-failed",
+            "background": background,
+            "minimize": minimized,
+            "home": home,
+            "rollback": restore_backgrounded_component(component),
+        }
+    return {
+        **base,
+        "ok": True,
+        "destination": "home",
+        "backgrounded_component": component,
+        "background": background,
+        "minimize": minimized,
+        "home": home,
+    }
+
+
+def background_unmanaged_back(window: XWindow) -> dict[str, Any]:
+    """Apply mobile Back to an external X11 client without killing it."""
+
+    if not window.window_id:
+        return {"ok": False, "reason": "unmanaged-window-id-unavailable"}
+    minimized = window_action("minimize", window.window_id)
+    if minimized.get("ok") is not True:
+        return {
+            "ok": False,
+            "reason": "window-minimize-failed",
+            "minimize": minimized,
+        }
+    home = activate_launcher_home()
+    if home.get("ok") is not True:
+        return {
+            "ok": False,
+            "reason": "home-activation-failed",
+            "minimize": minimized,
+            "home": home,
+            "rollback": window_action("focus", window.window_id),
+        }
+    return {
+        "ok": True,
+        "destination": "home",
+        "backgrounded_window": window.window_id,
+        "minimize": minimized,
+        "home": home,
     }
 
 
@@ -1295,6 +1431,7 @@ def handle_method(method: str, payload: dict) -> dict:
                 # Refresh before applying the root-page lifecycle fallback.
                 try:
                     managed = core_foreground_windows()
+                    visible = top_content_window()
                 except Exception as exc:
                     return {
                         "ok": False,
@@ -1305,6 +1442,14 @@ def handle_method(method: str, payload: dict) -> dict:
                     return {"ok": False, "reason": "no-user-window"}
             active = managed[0]
             component = str(active["component"])
+            if method == "back":
+                # Refreshing list_windows before minimize also captures the
+                # unobscured thumbnail used by the task switcher.
+                return background_managed_back(
+                    component,
+                    str(active.get("title") or component),
+                    visible,
+                )
             try:
                 response = MsysClient.public_call(
                     "msys.core",
@@ -1329,13 +1474,15 @@ def handle_method(method: str, payload: dict) -> dict:
                         else "stop returned a non-object"
                     ),
                 }
-            return complete_managed_back(
+            return complete_managed_close(
                 component,
                 str(active.get("title") or component),
             )
         window = active_or_top_user_window()
         if not window:
             return {"ok": False, "reason": "no-user-window"}
+        if method == "back":
+            return background_unmanaged_back(window)
         return {"ok": True, **close_window(window)}
     if method == "activate_component":
         identity = str(payload.get("identity", "")).strip()

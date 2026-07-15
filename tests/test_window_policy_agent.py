@@ -586,12 +586,19 @@ class WindowPolicyIdentityTests(unittest.TestCase):
             "identity": "org.msys.apps.calculator",
             "title": "Calculator",
         }
+        window = agent.XWindow(
+            "0x41",
+            "Calculator",
+            window_id="msys.x11-window.v1:s:0x41",
+            identity="org.msys.apps.calculator",
+            component="org.msys.apps:calculator",
+        )
         with mock.patch.object(
             agent, "dismiss_top_overlay", return_value=None
         ), mock.patch.object(
-            agent, "top_content_window", return_value=None
+            agent, "top_content_window", return_value=window
         ), mock.patch.object(
-            agent, "core_foreground_windows", side_effect=[[current], [current], []]
+            agent, "core_foreground_windows", side_effect=[[current], [current]]
         ) as foreground, mock.patch.object(agent.MsysClient, "public_call") as call:
             call.side_effect = [
                 {
@@ -602,7 +609,7 @@ class WindowPolicyIdentityTests(unittest.TestCase):
                     "type": "return",
                     "payload": {
                         "component": "org.msys.apps:calculator",
-                        "state": "stopped",
+                        "state": "background",
                     },
                 },
                 {
@@ -618,15 +625,26 @@ class WindowPolicyIdentityTests(unittest.TestCase):
                 },
             ]
 
-            result = agent.handle_method("back", {})
+            with mock.patch.object(
+                agent,
+                "window_action",
+                return_value={
+                    "ok": True,
+                    "schema": "msys.window-action.v1",
+                    "action": "minimize",
+                    "window_id": window.window_id,
+                },
+            ) as action:
+                result = agent.handle_method("back", {})
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["closed_component"], current["component"])
+        self.assertEqual(result["backgrounded_component"], current["component"])
         self.assertEqual(result["destination"], "home")
         self.assertEqual(
             result["home"]["provider"], "org.msys.shell.pyside:launcher"
         )
-        self.assertEqual(foreground.call_count, 3)
+        self.assertEqual(foreground.call_count, 2)
+        action.assert_called_once_with("minimize", window.window_id)
         self.assertEqual(call.call_args_list, [
             mock.call(
                 "msys.core",
@@ -636,7 +654,7 @@ class WindowPolicyIdentityTests(unittest.TestCase):
             ),
             mock.call(
                 "msys.core",
-                "stop",
+                "background_component",
                 {"component": "org.msys.apps:calculator"},
                 timeout=4,
             ),
@@ -742,16 +760,23 @@ class WindowPolicyIdentityTests(unittest.TestCase):
             ),
         ])
 
-    def test_back_stop_failure_does_not_restore_or_activate_home(self) -> None:
+    def test_back_background_failure_does_not_minimize_or_activate_home(self) -> None:
         current = {
             "component": "org.msys.apps:notes",
             "identity": "org.msys.apps.notes",
             "title": "Notes",
         }
+        window = agent.XWindow(
+            "0x42",
+            "Notes",
+            window_id="msys.x11-window.v1:s:0x42",
+            identity="org.msys.apps.notes",
+            component="org.msys.apps:notes",
+        )
         with mock.patch.object(
             agent, "dismiss_top_overlay", return_value=None
         ), mock.patch.object(
-            agent, "top_content_window", return_value=None
+            agent, "top_content_window", return_value=window
         ), mock.patch.object(
             agent, "core_foreground_windows", side_effect=[[current], [current]]
         ) as foreground, mock.patch.object(
@@ -764,21 +789,96 @@ class WindowPolicyIdentityTests(unittest.TestCase):
                 },
                 RuntimeError("still running"),
             ],
-        ) as call:
+        ) as call, mock.patch.object(agent, "window_action") as action:
             result = agent.handle_method("back", {})
 
         self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "component-stop-failed")
+        self.assertEqual(result["reason"], "component-background-failed")
         self.assertEqual(foreground.call_count, 2)
+        action.assert_not_called()
         self.assertEqual(call.call_args_list, [
             mock.call("msys.core", "navigation_back", {}, timeout=1.5),
             mock.call(
                 "msys.core",
-                "stop",
+                "background_component",
                 {"component": current["component"]},
                 timeout=4,
             ),
         ])
+
+    def test_back_minimize_failure_rolls_managed_component_forward(self) -> None:
+        current = {
+            "component": "org.msys.apps:notes",
+            "identity": "org.msys.apps.notes",
+            "title": "Notes",
+        }
+        window = agent.XWindow(
+            "0x43",
+            "Notes",
+            window_id="msys.x11-window.v1:s:0x43",
+            identity="org.msys.apps.notes",
+            component="org.msys.apps:notes",
+        )
+        with mock.patch.object(
+            agent, "dismiss_top_overlay", return_value=None
+        ), mock.patch.object(
+            agent, "top_content_window", return_value=window
+        ), mock.patch.object(
+            agent, "core_foreground_windows", side_effect=[[current], [current]]
+        ), mock.patch.object(
+            agent.MsysClient,
+            "public_call",
+            side_effect=[
+                {"type": "return", "payload": {"handled": False, "fallback": True}},
+                {"type": "return", "payload": {"state": "background"}},
+                {"type": "return", "payload": {"state": "ready", "activation": {"ok": True}}},
+            ],
+        ) as call, mock.patch.object(
+            agent,
+            "window_action",
+            return_value={"ok": False, "reason": "stale-or-missing-window"},
+        ):
+            result = agent.handle_method("back", {})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "window-minimize-failed")
+        self.assertTrue(result["rollback"]["ok"])
+        self.assertEqual(call.call_args_list[-1], mock.call(
+            "msys.core",
+            "start",
+            {"component": current["component"]},
+            timeout=8,
+        ))
+
+    def test_back_minimizes_external_window_without_closing_it(self) -> None:
+        window = agent.XWindow(
+            "0x44",
+            "External",
+            window_id="msys.x11-window.v1:s:0x44",
+            identity="org.example.external",
+        )
+        with mock.patch.object(
+            agent, "dismiss_top_overlay", return_value=None
+        ), mock.patch.object(
+            agent, "top_content_window", return_value=window
+        ), mock.patch.object(
+            agent, "core_foreground_windows", return_value=[]
+        ), mock.patch.object(
+            agent, "active_or_top_user_window", return_value=window
+        ), mock.patch.object(
+            agent,
+            "window_action",
+            return_value={"ok": True, "action": "minimize", "window_id": window.window_id},
+        ) as action, mock.patch.object(
+            agent,
+            "activate_launcher_home",
+            return_value={"ok": True, "role": "launcher"},
+        ):
+            result = agent.handle_method("back", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["backgrounded_window"], window.window_id)
+        action.assert_called_once_with("minimize", window.window_id)
 
     def test_navigation_action_gives_buttons_and_swipes_one_typed_entrypoint(
         self,
