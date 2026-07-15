@@ -73,8 +73,10 @@ static void test_metadata_damage_filters(void)
     assert(property_affects_window_metadata(44, properties, 4));
     assert(!property_affects_window_metadata(33, properties, 4));
     assert(!property_affects_window_metadata(None, properties, 4));
+    assert(overlay_layer_pair_is_ordered(LAYER_APPLICATION, LAYER_INPUT_METHOD));
     assert(overlay_layer_pair_is_ordered(LAYER_INPUT_METHOD, LAYER_RECENTS));
     assert(overlay_layer_pair_is_ordered(LAYER_CHROME, LAYER_NAVIGATION));
+    assert(!overlay_layer_pair_is_ordered(LAYER_RECENTS, LAYER_APPLICATION));
     assert(!overlay_layer_pair_is_ordered(LAYER_RECENTS, LAYER_INPUT_METHOD));
 }
 

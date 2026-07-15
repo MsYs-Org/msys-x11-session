@@ -58,6 +58,9 @@ Apps, `close_active`, and generation-checked typed window actions. Native
 component which is ready but has not mapped its first surface is only added by
 the Python compatibility provider. Native display-session publication covers
 the output-only and CH347 direct/XTest modes used by the reference providers.
+The idempotent stack repair includes applications in its ordering audit, then
+raises only system layers; task-switcher therefore cannot remain mapped below
+an application, while an already-correct stack emits no redundant X request.
 The optional `xinput` property-probe mode intentionally falls back to the
 Python publisher rather than adding a subprocess parser to the resident C
 agent.
@@ -76,7 +79,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.7.tar.gz
+make package             # dist/org.msys.x11.session-0.2.8.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 

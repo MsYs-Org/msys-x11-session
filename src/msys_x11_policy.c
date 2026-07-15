@@ -1041,8 +1041,11 @@ static void raise_system_overlays(Display *display, Window root)
         }
         layer = layer_for_kind(kind);
         free_window_metadata(&metadata);
-        if (layer == LAYER_APPLICATION)
-            continue;
+        /* Applications participate in the ordering check even though the
+         * repair pass only raises system layers.  Excluding them made an
+         * application above an otherwise internally ordered Overview/chrome/
+         * navigation stack look healthy, so task-switcher stayed viewable but
+         * fully obscured. */
         layered[layered_count].window = children[i];
         layered[layered_count].layer = layer;
         layered_count++;
@@ -1065,9 +1068,9 @@ static void raise_system_overlays(Display *display, Window root)
         return;
     }
 
-    /* Preserve relative order inside a layer and impose a deterministic order
-     * between layers.  Unlike the old implementation this also handles more
-     * than one notification or system window at a time. */
+    /* Preserve application order and relative order inside every system
+     * layer. Raising only the system layers moves them above all applications
+     * while retaining the declared input/recents/chrome/navigation order. */
     for (layer_index = 0; layer_index < sizeof(overlay_layers) /
             sizeof(overlay_layers[0]); layer_index++) {
         for (i = 0; i < layered_count; i++) {

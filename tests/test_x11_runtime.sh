@@ -20,6 +20,7 @@ policy_pid=
 fixture_pid=
 overview_pid=
 launcher_guard_pid=
+late_fixture_pid=
 
 cleanup() {
     if [ -n "$policy_pid" ]; then
@@ -33,6 +34,9 @@ cleanup() {
     fi
     if [ -n "$launcher_guard_pid" ]; then
         kill "$launcher_guard_pid" 2>/dev/null || true
+    fi
+    if [ -n "$late_fixture_pid" ]; then
+        kill "$late_fixture_pid" 2>/dev/null || true
     fi
     if [ -n "$xvfb_pid" ]; then
         kill "$xvfb_pid" 2>/dev/null || true
@@ -184,6 +188,31 @@ case "$windows" in
     *'"title":"MSYS Recents - Thumbnail Guard"'*'"role":"task-switcher"'*'"state":"visible"'*) ;;
     *) echo "visible task switcher was not observed: $windows" >&2; exit 1 ;;
 esac
+
+# Mapping a new application while Overview is visible must not place the app
+# above task-switcher.  list-windows is top-to-bottom, so the task-switcher
+# record must precede the late application's record.
+xmessage -title 'MSYS Late Application - Stacking Guard' -timeout 30 late \
+    >"$TMP/late-application.log" 2>&1 &
+late_fixture_pid=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    if xwininfo -name 'MSYS Late Application - Stacking Guard' 2>/dev/null |
+            grep -q 'Map State: IsViewable'; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.05
+done
+windows=$($BIN --list-windows 2>/dev/null || true)
+case "$windows" in
+    *'"title":"MSYS Recents - Thumbnail Guard"'*'"title":"MSYS Late Application - Stacking Guard"'*) ;;
+    *) echo "late application covered task switcher: $windows" >&2; exit 1 ;;
+esac
+kill "$late_fixture_pid" 2>/dev/null || true
+wait "$late_fixture_pid" 2>/dev/null || true
+late_fixture_pid=
+
 if ! cmp -s "$TMP/thumbnail-before-overview.ppm" "$thumbnail"; then
     echo "application thumbnail was overwritten behind task switcher" >&2
     exit 1

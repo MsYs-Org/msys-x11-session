@@ -18,7 +18,7 @@ TEST_TARGET := $(BIN_DIR)/test-policy-logic
 LAYOUT_TEST_TARGET := $(BIN_DIR)/test-layout
 AGENT_TEST_TARGET := $(BIN_DIR)/test-native-agent
 PACKAGE_ID := org.msys.x11.session
-PACKAGE_VERSION := 0.2.7
+PACKAGE_VERSION := 0.2.8
 PACKAGE_ARCHIVE := dist/$(PACKAGE_ID)-$(PACKAGE_VERSION).tar.gz
 
 .PHONY: all native-test python-test test strict integration-test publisher-test \
