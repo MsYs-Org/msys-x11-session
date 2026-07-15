@@ -591,9 +591,13 @@ class WindowPolicyIdentityTests(unittest.TestCase):
         ), mock.patch.object(
             agent, "top_content_window", return_value=None
         ), mock.patch.object(
-            agent, "core_foreground_windows", side_effect=[[current], []]
+            agent, "core_foreground_windows", side_effect=[[current], [current], []]
         ) as foreground, mock.patch.object(agent.MsysClient, "public_call") as call:
             call.side_effect = [
+                {
+                    "type": "return",
+                    "payload": {"handled": False, "fallback": True},
+                },
                 {
                     "type": "return",
                     "payload": {
@@ -622,8 +626,14 @@ class WindowPolicyIdentityTests(unittest.TestCase):
         self.assertEqual(
             result["home"]["provider"], "org.msys.shell.pyside:launcher"
         )
-        self.assertEqual(foreground.call_count, 2)
+        self.assertEqual(foreground.call_count, 3)
         self.assertEqual(call.call_args_list, [
+            mock.call(
+                "msys.core",
+                "navigation_back",
+                {},
+                timeout=1.5,
+            ),
             mock.call(
                 "msys.core",
                 "stop",
@@ -637,6 +647,41 @@ class WindowPolicyIdentityTests(unittest.TestCase):
                 timeout=8,
             ),
         ])
+
+    def test_back_handled_by_application_does_not_stop_component(self) -> None:
+        current = {
+            "component": "org.msys.settings:main",
+            "identity": "org.msys.settings",
+            "title": "Settings",
+        }
+        with mock.patch.object(
+            agent, "dismiss_top_overlay", return_value=None
+        ), mock.patch.object(
+            agent, "top_content_window", return_value=None
+        ), mock.patch.object(
+            agent, "core_foreground_windows", return_value=[current]
+        ) as foreground, mock.patch.object(agent.MsysClient, "public_call") as call:
+            call.return_value = {
+                "type": "return",
+                "payload": {
+                    "handled": True,
+                    "fallback": False,
+                    "component": current["component"],
+                    "result": {"handled": True, "page": "home"},
+                },
+            }
+
+            result = agent.handle_method("back", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["destination"], "application")
+        foreground.assert_called_once_with()
+        call.assert_called_once_with(
+            "msys.core",
+            "navigation_back",
+            {},
+            timeout=1.5,
+        )
 
     def test_back_restores_exact_previous_managed_application(self) -> None:
         current = {
@@ -708,23 +753,32 @@ class WindowPolicyIdentityTests(unittest.TestCase):
         ), mock.patch.object(
             agent, "top_content_window", return_value=None
         ), mock.patch.object(
-            agent, "core_foreground_windows", return_value=[current]
+            agent, "core_foreground_windows", side_effect=[[current], [current]]
         ) as foreground, mock.patch.object(
             agent.MsysClient,
             "public_call",
-            side_effect=RuntimeError("still running"),
+            side_effect=[
+                {
+                    "type": "return",
+                    "payload": {"handled": False, "fallback": True},
+                },
+                RuntimeError("still running"),
+            ],
         ) as call:
             result = agent.handle_method("back", {})
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "component-stop-failed")
-        foreground.assert_called_once_with()
-        call.assert_called_once_with(
-            "msys.core",
-            "stop",
-            {"component": current["component"]},
-            timeout=4,
-        )
+        self.assertEqual(foreground.call_count, 2)
+        self.assertEqual(call.call_args_list, [
+            mock.call("msys.core", "navigation_back", {}, timeout=1.5),
+            mock.call(
+                "msys.core",
+                "stop",
+                {"component": current["component"]},
+                timeout=4,
+            ),
+        ])
 
     def test_navigation_action_gives_buttons_and_swipes_one_typed_entrypoint(
         self,

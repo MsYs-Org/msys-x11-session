@@ -103,7 +103,7 @@ Existing methods remain available:
 
 ```text
 back({})
-close_active({})  # Back compatibility alias
+close_active({})  # explicit lifecycle close; not an alias of Back
 home({})
 recents({})       # data snapshot used by the task-switcher provider
 ```
@@ -121,13 +121,21 @@ run outside the provider's single mIPC reader because their role transaction
 calls back into this provider (`activate_component` or `recents`). This avoids
 a navigation-button deadlock.
 
-After Back successfully stops a supervised foreground component, the policy
-refreshes Core's foreground stack. It starts the exact next component so Core
-raises its stable window identity, or activates the selected launcher role
-when the stack is empty. Back also runs outside the private-channel reader
-because both continuations can synchronously call `activate_component` back
-into this provider. Overlay-only Back returns immediately after dismissing one
-layer and never changes the application destination.
+After overlays, Back first asks Core to deliver `navigation_back()` to the
+foreground component when its manifest provides
+`org.msys.application-navigation.v1`:
+
+```text
+navigation_back({}) -> { handled: true, page? }
+navigation_back({}) -> { handled: false }  # application root page
+```
+
+`handled:true` leaves lifecycle and stacking unchanged. At the root page, the
+policy refreshes Core's foreground stack, restores the exact previous task, or
+activates the selected launcher when the stack is empty. A declared navigation
+provider which times out or returns an invalid reply fails closed; the
+application is not killed. Overlay-only Back returns immediately after
+dismissing one layer and never changes the application destination.
 
 Back examines the real top-to-bottom X11 role stack and dismisses exactly one
 top-most overlay before touching an application:

@@ -1155,6 +1155,44 @@ def complete_managed_back(component: str, title: str) -> dict[str, Any]:
     }
 
 
+def application_navigation_back() -> dict[str, Any]:
+    """Offer Back to the foreground application's declared page stack."""
+
+    try:
+        response = MsysClient.public_call(
+            "msys.core",
+            "navigation_back",
+            {},
+            timeout=1.5,
+        )
+    except Exception as exc:
+        return {
+            "handled": False,
+            "fallback": False,
+            "reason": "application-navigation-failed",
+            "error": str(exc),
+        }
+    if not isinstance(response, dict) or response.get("type") != "return":
+        return {
+            "handled": False,
+            "fallback": False,
+            "reason": "application-navigation-failed",
+            "error": (
+                response.get("message") or response.get("code") or "call failed"
+                if isinstance(response, dict)
+                else "navigation_back returned a non-object"
+            ),
+        }
+    payload = response.get("payload", {})
+    if not isinstance(payload, dict):
+        return {
+            "handled": False,
+            "fallback": False,
+            "reason": "invalid-application-navigation-result",
+        }
+    return payload
+
+
 def handle_method(method: str, payload: dict) -> dict:
     print(f"window-policy-agent: handle {method}", flush=True)
     if method in {"list_windows", "recents"}:
@@ -1239,6 +1277,32 @@ def handle_method(method: str, payload: dict) -> dict:
                 )
             ):
                 return {"ok": False, "reason": "home-visible"}
+            if method == "back":
+                navigation = application_navigation_back()
+                if navigation.get("handled") is True:
+                    return {
+                        "ok": True,
+                        "destination": "application",
+                        "application_navigation": navigation,
+                    }
+                if navigation.get("fallback") is not True:
+                    return {
+                        "ok": False,
+                        "reason": "application-navigation-failed",
+                        "application_navigation": navigation,
+                    }
+                # The application can change foreground while servicing Back.
+                # Refresh before applying the root-page lifecycle fallback.
+                try:
+                    managed = core_foreground_windows()
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "reason": "foreground-refresh-failed",
+                        "error": str(exc),
+                    }
+                if not managed:
+                    return {"ok": False, "reason": "no-user-window"}
             active = managed[0]
             component = str(active["component"])
             try:

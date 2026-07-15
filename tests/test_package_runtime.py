@@ -133,6 +133,13 @@ class CanonicalManifestTests(unittest.TestCase):
             configure.index("raise_system_overlays(display, root)"),
         )
 
+    def test_back_and_close_active_have_distinct_application_semantics(self) -> None:
+        agent = (ROOT / "src" / "msys_x11_agent.c").read_text(encoding="utf-8")
+        self.assertIn('"navigation_back", "{}", 1500', agent)
+        self.assertIn('return back_action(agent, 1);', agent)
+        self.assertIn('return back_action(agent, 0);', agent)
+        self.assertIn('delegated = back_action(agent, 1);', agent)
+
     def test_ch347_wrapper_prefers_a_package_owned_x11display_tree(self) -> None:
         source = (ROOT / "scripts" / "msys_ch347_x11_provider.sh").read_text(
             encoding="utf-8"

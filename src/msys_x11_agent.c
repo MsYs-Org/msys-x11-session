@@ -705,7 +705,28 @@ static int is_dismissible_role(const char *role)
         strcmp(role, "input-method") == 0;
 }
 
-static char *back_action(struct msys_x11_agent *agent)
+/* 1 = handled in-app, 0 = app requested lifecycle fallback, -1 = fail closed. */
+static int application_back(struct msys_x11_agent *agent, char **detail)
+{
+    char *payload;
+    int handled = 0;
+    int fallback = 0;
+
+    *detail = NULL;
+    payload = public_payload(public_call(agent, "msys.core",
+            "navigation_back", "{}", 1500));
+    if (!payload)
+        return -1;
+    *detail = payload;
+    if (!json_get_boolean(payload, "handled", &handled) ||
+            !json_get_boolean(payload, "fallback", &fallback))
+        return -1;
+    if (handled)
+        return 1;
+    return fallback ? 0 : -1;
+}
+
+static char *back_action(struct msys_x11_agent *agent, int navigate_app)
 {
     struct msys_x11_window_summary window;
     char component[257];
@@ -744,6 +765,32 @@ static char *back_action(struct msys_x11_agent *agent)
 
     foreground = foreground_component(agent, component, sizeof(component));
     free(foreground);
+    if (*component && navigate_app) {
+        char *navigation = NULL;
+        int navigation_result = application_back(agent, &navigation);
+
+        if (navigation_result > 0) {
+            result = navigation ? format_json(
+                    "{\"ok\":true,\"destination\":\"application\","
+                    "\"application_navigation\":%s}", navigation) : NULL;
+            free(navigation);
+            return result;
+        }
+        if (navigation_result < 0) {
+            result = navigation ? format_json(
+                    "{\"ok\":false,\"reason\":\"application-navigation-failed\","
+                    "\"application_navigation\":%s}", navigation) :
+                strdup("{\"ok\":false,\"reason\":\"application-navigation-failed\"}");
+            free(navigation);
+            return result;
+        }
+        free(navigation);
+        /* The app may have changed foreground while handling the request.
+         * Refresh before applying the root-page lifecycle fallback. */
+        foreground = foreground_component(agent, component,
+                sizeof(component));
+        free(foreground);
+    }
     if (*component) {
         char *quoted_component = json_quote(component);
         char *stop_request = quoted_component
@@ -930,8 +977,10 @@ static char *handle_call(struct msys_x11_agent *agent, const char *method,
         return activate_component(agent, payload);
     if (strcmp(method, "home") == 0)
         return home_action(agent);
-    if (strcmp(method, "back") == 0 || strcmp(method, "close_active") == 0)
-        return back_action(agent);
+    if (strcmp(method, "back") == 0)
+        return back_action(agent, 1);
+    if (strcmp(method, "close_active") == 0)
+        return back_action(agent, 0);
     if (strcmp(method, "navigation_action") == 0 ||
             strcmp(method, "navigate") == 0) {
         char action[32] = "";
@@ -953,7 +1002,7 @@ static char *handle_call(struct msys_x11_agent *agent, const char *method,
         } else if (strcmp(action, "home") == 0) {
             delegated = home_action(agent);
         } else if (strcmp(action, "back") == 0) {
-            delegated = back_action(agent);
+            delegated = back_action(agent, 1);
         } else {
             return strdup("{\"ok\":false,\"schema\":\"msys.navigation-action.v1\",\"reason\":\"invalid-navigation-action\"}");
         }
