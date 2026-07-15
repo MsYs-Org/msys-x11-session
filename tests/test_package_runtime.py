@@ -137,6 +137,8 @@ class CanonicalManifestTests(unittest.TestCase):
         agent = (ROOT / "src" / "msys_x11_agent.c").read_text(encoding="utf-8")
         self.assertIn('"navigation_back", "{}", 1500', agent)
         self.assertIn('"background_component"', agent)
+        self.assertIn("msys_x11_policy_component_window", agent)
+        self.assertIn("msys_x11_agent_home_visible(component, window.role)", agent)
         self.assertIn('agent->display, "minimize"', agent)
         self.assertIn("backgrounded_component", agent)
         self.assertIn('return back_action(agent, 1);', agent)

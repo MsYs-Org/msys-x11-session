@@ -142,6 +142,12 @@ navigation provider which times out or returns an invalid reply fails closed.
 Overlay-only Back returns immediately after dismissing one layer and never
 changes the application destination.
 
+The launcher may remain mapped underneath an active application. Native Back
+therefore treats it as Home only when Core reports no active (non-background)
+foreground component. When an application is active, policy resolves the X11
+surface by its exact `_MSYS_COMPONENT_ID`; stacking order or a mapped launcher
+cannot redirect Back away from that application.
+
 Back examines the real top-to-bottom X11 role stack and dismisses exactly one
 top-most overlay before touching an application:
 

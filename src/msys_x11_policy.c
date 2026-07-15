@@ -2061,6 +2061,81 @@ int msys_x11_policy_top_window(const char *display_name,
     return found;
 }
 
+int msys_x11_policy_component_window(const char *display_name,
+        const char *component, struct msys_x11_window_summary *summary)
+{
+    Display *display;
+    Window root;
+    Window root_return;
+    Window parent_return;
+    Window *children = NULL;
+    unsigned int count = 0;
+    unsigned int i;
+    int found = 0;
+
+    if (!summary || !component || !*component)
+        return -1;
+    memset(summary, 0, sizeof(*summary));
+    display = open_action_display(display_name);
+    if (!display)
+        return -1;
+    root = DefaultRootWindow(display);
+    if (!XQueryTree(display, root, &root_return, &parent_return, &children,
+                &count)) {
+        XCloseDisplay(display);
+        return -1;
+    }
+    for (i = count; i > 0; i--) {
+        Window window = children[i - 1];
+        XWindowAttributes attributes;
+        struct window_metadata metadata;
+        enum window_kind kind;
+        const char *owned_component;
+        const char *role;
+        char *window_id;
+        int compatibility_title;
+
+        if (!XGetWindowAttributes(display, window, &attributes) ||
+                attributes.map_state != IsViewable ||
+                attributes.class == InputOnly)
+            continue;
+        load_window_metadata(display, window, &metadata);
+        kind = classify_window(&metadata);
+        owned_component = metadata_component(&metadata);
+        if (kind != WINDOW_APPLICATION || !owned_component ||
+                strcmp(owned_component, component) != 0) {
+            free_window_metadata(&metadata);
+            continue;
+        }
+        window_id = ensure_window_id(display, window);
+        if (!window_id) {
+            free_window_metadata(&metadata);
+            continue;
+        }
+        role = canonical_window_role(&metadata, kind, &compatibility_title);
+        (void)compatibility_title;
+        copy_summary_text(summary->window_id, sizeof(summary->window_id),
+                window_id);
+        copy_summary_text(summary->title, sizeof(summary->title),
+                metadata.title);
+        copy_summary_text(summary->identity, sizeof(summary->identity),
+                metadata_identity(&metadata));
+        copy_summary_text(summary->component, sizeof(summary->component),
+                owned_component);
+        copy_summary_text(summary->role, sizeof(summary->role), role);
+        copy_summary_text(summary->kind, sizeof(summary->kind),
+                window_kind_name(kind));
+        free(window_id);
+        free_window_metadata(&metadata);
+        found = 1;
+        break;
+    }
+    if (children)
+        XFree(children);
+    XCloseDisplay(display);
+    return found;
+}
+
 int msys_x11_policy_window_summary(const char *display_name,
         const char *window_id, struct msys_x11_window_summary *summary)
 {

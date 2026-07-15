@@ -1,7 +1,15 @@
 #ifndef MSYS_X11_AGENT_H
 #define MSYS_X11_AGENT_H
 
+#include <stddef.h>
+
 struct msys_x11_agent;
+
+/* Pure native-policy decisions kept exported for the socketpair tests. */
+int msys_x11_agent_active_foreground_component(const char *payload,
+        char *component, size_t size);
+int msys_x11_agent_home_visible(const char *active_component,
+        const char *top_role);
 
 /* A missing MSYS_CONTROL_FD is not an error and yields a NULL agent. */
 int msys_x11_agent_start(struct msys_x11_agent **agent,

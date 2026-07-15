@@ -65,6 +65,21 @@ int main(void)
     char *packet;
     msys_mipc_client peer;
     struct msys_x11_agent *agent = NULL;
+    char component[128];
+
+    CHECK(msys_x11_agent_active_foreground_component(
+                "{\"windows\":[{\"component\":\"org.example.old:main\","
+                "\"state\":\"background\"},{\"component\":\"org.example.app:main\","
+                "\"state\":\"ready\"}]}", component,
+                sizeof(component)) == 1);
+    CHECK(strcmp(component, "org.example.app:main") == 0);
+    CHECK(msys_x11_agent_home_visible(component, "launcher") == 0);
+    CHECK(msys_x11_agent_home_visible("", "launcher") == 1);
+    CHECK(msys_x11_agent_active_foreground_component(
+                "{\"windows\":[{\"component\":\"org.example.old:main\","
+                "\"state\":\"background\"}]}", component,
+                sizeof(component)) == 0);
+    CHECK(component[0] == '\0');
 
     CHECK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets) == 0);
     CHECK(msys_mipc_client_init(&peer, sockets[0], 1) == MSYS_MIPC_OK);

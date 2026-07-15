@@ -373,13 +373,19 @@ static char *public_payload(char *response)
     return payload;
 }
 
-static int first_foreground_component(const char *payload, char *component,
+int msys_x11_agent_active_foreground_component(const char *payload,
+        char *component,
         size_t size)
 {
     char *windows = copy_raw(payload, "windows");
     const char *cursor;
     int result = 0;
 
+    if (!component || size == 0u) {
+        free(windows);
+        return 0;
+    }
+    component[0] = '\0';
     if (!windows)
         return 0;
     cursor = strchr(windows, '{');
@@ -406,11 +412,16 @@ static int first_foreground_component(const char *payload, char *component,
                 size_t length = (size_t)(end - cursor);
                 char *object = malloc(length + 1u);
                 if (object) {
+                    char state[32] = "";
                     memcpy(object, cursor, length);
                     object[length] = '\0';
-                    result = msys_mipc_json_get_string(object, "component",
-                            component, size, NULL) == MSYS_MIPC_OK &&
-                        *component;
+                    (void)msys_mipc_json_get_string(object, "state", state,
+                            sizeof(state), NULL);
+                    if (strcmp(state, "background") != 0) {
+                        result = msys_mipc_json_get_string(object,
+                                "component", component, size, NULL) ==
+                                MSYS_MIPC_OK && *component;
+                    }
                     free(object);
                 }
                 break;
@@ -422,6 +433,13 @@ static int first_foreground_component(const char *payload, char *component,
     }
     free(windows);
     return result;
+}
+
+int msys_x11_agent_home_visible(const char *active_component,
+        const char *top_role)
+{
+    return (!active_component || !*active_component) && top_role &&
+        strcmp(top_role, "launcher") == 0;
 }
 
 static int foreground_contains_component(const char *payload,
@@ -487,7 +505,7 @@ static char *foreground_component(struct msys_x11_agent *agent,
 
     *component = '\0';
     if (payload)
-        first_foreground_component(payload, component, size);
+        msys_x11_agent_active_foreground_component(payload, component, size);
     return payload;
 }
 
@@ -744,7 +762,7 @@ static char *component_lifecycle_call(struct msys_x11_agent *agent,
 
 static char *back_action(struct msys_x11_agent *agent, int navigate_app)
 {
-    struct msys_x11_window_summary window;
+    struct msys_x11_window_summary window = {0};
     char component[257];
     char next_component[257];
     char *foreground;
@@ -775,12 +793,11 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
         return result;
     }
 
-    if (msys_x11_policy_top_window(agent->display, 0, &window) == 1 &&
-            strcmp(window.role, "launcher") == 0)
-        return strdup("{\"ok\":false,\"reason\":\"home-visible\"}");
-
+    (void)msys_x11_policy_top_window(agent->display, 0, &window);
     foreground = foreground_component(agent, component, sizeof(component));
     free(foreground);
+    if (msys_x11_agent_home_visible(component, window.role))
+        return strdup("{\"ok\":false,\"reason\":\"home-visible\"}");
     if (*component && navigate_app) {
         char *navigation = NULL;
         int navigation_result = application_back(agent, &navigation);
@@ -806,7 +823,8 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
         foreground = foreground_component(agent, component,
                 sizeof(component));
         free(foreground);
-        (void)msys_x11_policy_top_window(agent->display, 0, &window);
+        (void)msys_x11_policy_component_window(agent->display, component,
+                &window);
     }
     if (*component && navigate_app) {
         char *snapshot;
@@ -817,7 +835,9 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
         int home_ok = 0;
         int action_rc;
 
-        if (strcmp(window.kind, "application") != 0 || !*window.window_id)
+        if (strcmp(window.kind, "application") != 0 ||
+                strcmp(window.component, component) != 0 ||
+                !*window.window_id)
             return strdup("{\"ok\":false,\"reason\":\"managed-window-unavailable\"}");
 
         /* Save a clean recents thumbnail while the task is still mapped and

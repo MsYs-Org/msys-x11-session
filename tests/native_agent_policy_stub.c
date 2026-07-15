@@ -30,6 +30,15 @@ int msys_x11_policy_top_window(const char *display_name,
     return 0;
 }
 
+int msys_x11_policy_component_window(const char *display_name,
+        const char *component, struct msys_x11_window_summary *summary)
+{
+    (void)display_name;
+    (void)component;
+    memset(summary, 0, sizeof(*summary));
+    return 0;
+}
+
 int msys_x11_policy_window_summary(const char *display_name,
         const char *window_id, struct msys_x11_window_summary *summary)
 {

@@ -25,6 +25,8 @@ char *msys_x11_policy_list_windows_json(const char *display_name);
 char *msys_x11_policy_layout_wire(const char *display_name);
 int msys_x11_policy_top_window(const char *display_name,
         int dismissible_only, struct msys_x11_window_summary *summary);
+int msys_x11_policy_component_window(const char *display_name,
+        const char *component, struct msys_x11_window_summary *summary);
 int msys_x11_policy_window_summary(const char *display_name,
         const char *window_id, struct msys_x11_window_summary *summary);
 int msys_x11_policy_window_action(const char *display_name,
