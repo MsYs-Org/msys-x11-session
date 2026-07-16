@@ -614,7 +614,39 @@ static char *handle_set_layout(struct msys_x11_agent *agent,
     if (msys_x11_policy_set_layout(agent->display, profile, orientation,
                 insets) != 0)
         return strdup("{\"ok\":false,\"reason\":\"invalid-layout\"}");
-    return layout_json(agent);
+    {
+        int attempt;
+
+        for (attempt = 0; attempt < 50; attempt++) {
+            char actual_profile[16];
+            char actual_orientation[16];
+            char actual_insets[64];
+            char *actual = layout_json(agent);
+
+            if (actual &&
+                    msys_mipc_json_get_string(actual, "profile",
+                        actual_profile, sizeof(actual_profile), NULL) ==
+                        MSYS_MIPC_OK &&
+                    msys_mipc_json_get_string(actual, "orientation_policy",
+                        actual_orientation, sizeof(actual_orientation), NULL) ==
+                        MSYS_MIPC_OK &&
+                    msys_mipc_json_get_string(actual, "insets_policy",
+                        actual_insets, sizeof(actual_insets), NULL) ==
+                        MSYS_MIPC_OK &&
+                    strcmp(actual_profile, profile) == 0 &&
+                    strcmp(actual_orientation, orientation) == 0 &&
+                    strcmp(actual_insets, insets) == 0)
+                return actual;
+            free(actual);
+            {
+                struct timespec delay = {0, 20 * 1000 * 1000};
+
+                nanosleep(&delay, NULL);
+            }
+        }
+    }
+    return strdup(
+            "{\"ok\":false,\"reason\":\"layout-update-not-observed\"}");
 }
 
 static char *activate_component(struct msys_x11_agent *agent,

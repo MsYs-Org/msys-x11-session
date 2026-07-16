@@ -419,6 +419,39 @@ $BIN --window-focus "$window_id"
 wait_window_text '"title":"MSYS-Window-Fixture","identity":"Xmessage","component":null,"role":"application","kind":"application","state":"visible"'
 $BIN --window-move-resize "$window_id" 100 120 320 240
 wait_window_text '"geometry":{"x":100,"y":120,"width":320,"height":240}'
+placement=$($BIN --window-maximize "$window_id")
+case "$placement" in
+    *'"profile":"desktop","placement":"maximized"'*'"geometry":{"x":40,"y":10,"width":740,"height":760}'*'"restore_geometry":{"x":100,"y":120,"width":320,"height":240}'*) ;;
+    *) echo "unexpected maximize result: $placement" >&2; exit 1 ;;
+esac
+placement=$($BIN --window-snap-right "$window_id")
+case "$placement" in
+    *'"placement":"snap-right"'*'"geometry":{"x":410,"y":10,"width":370,"height":760}'*'"restore_geometry":{"x":100,"y":120,"width":320,"height":240}'*) ;;
+    *) echo "unexpected snap-right result: $placement" >&2; exit 1 ;;
+esac
+placement=$($BIN --window-restore "$window_id")
+case "$placement" in
+    *'"placement":"normal"'*'"geometry":{"x":100,"y":120,"width":320,"height":240}'*'"restore_geometry":null'*) ;;
+    *) echo "unexpected restore result: $placement" >&2; exit 1 ;;
+esac
+
+# A live desktop -> mobile -> desktop change must neither restart X11 nor lose
+# a normal desktop window's bounded geometry. Desktop-only placement requests
+# fail closed while the mobile policy owns application geometry.
+$BIN --set-layout mobile auto auto
+wait_layout "profile=mobile;orientation_policy=auto;insets_policy=auto" >/dev/null
+wait_window_text '"geometry":{"x":0,"y":64,"width":800,"height":672}'
+if placement=$($BIN --window-snap-left "$window_id" 2>/dev/null); then
+    echo "mobile accepted desktop snap: $placement" >&2
+    exit 1
+fi
+case "$placement" in
+    *'"reason":"profile-not-supported"'*) ;;
+    *) echo "mobile snap returned an untyped failure: $placement" >&2; exit 1 ;;
+esac
+$BIN --set-layout desktop auto 10,20,30,40
+wait_layout "profile=desktop;orientation_policy=auto;insets_policy=10,20,30,40" >/dev/null
+wait_window_text '"geometry":{"x":100,"y":120,"width":320,"height":240}'
 $BIN --window-close "$window_id"
 i=0
 while kill -0 "$fixture_pid" 2>/dev/null && [ "$i" -lt 50 ]; do

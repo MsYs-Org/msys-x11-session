@@ -60,6 +60,9 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertIn(
             "mipc.event:publish:msys.layout.changed", policy["permissions"]
         )
+        self.assertIn(
+            "mipc.event:publish:msys.window.action", policy["permissions"]
+        )
         roles = {item.get("role") for item in policy["provides"] if "role" in item}
         self.assertEqual(roles, {"window-policy", "window-manager"})
         self.assertEqual(

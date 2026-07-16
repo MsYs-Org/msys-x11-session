@@ -493,6 +493,7 @@ static void test_display_session_layout_signal_is_strict(void)
 
 static void test_desktop_placement_geometry_is_bounded(void)
 {
+    struct msys_layout_config config;
     struct msys_layout_state layout = {0};
     struct msys_rect rect;
     struct msys_rect decoded;
@@ -519,6 +520,26 @@ static void test_desktop_placement_geometry_is_bounded(void)
     assert(!window_geometry_decode(
                 "msys.window-geometry.v1;x=0;y=0;width=640;height=480;bad=1",
                 &decoded));
+
+    assert(msys_layout_config_parse(&config, "desktop", "portrait", "auto"));
+    msys_layout_resolve(&config, 320, 480, &layout);
+    window_placement_target(&layout, WINDOW_PLACEMENT_MAXIMIZED, &rect);
+    assert(rect.x == 0 && rect.y == 42 && rect.width == 320 &&
+            rect.height == 396);
+    window_placement_target(&layout, WINDOW_PLACEMENT_SNAP_LEFT, &rect);
+    assert(rect.x == 0 && rect.y == 42 && rect.width == 160 &&
+            rect.height == 396);
+    window_placement_target(&layout, WINDOW_PLACEMENT_SNAP_RIGHT, &rect);
+    assert(rect.x == 160 && rect.y == 42 && rect.width == 160 &&
+            rect.height == 396);
+    assert(placement_action_rejection(MSYS_LAYOUT_DESKTOP,
+                WINDOW_APPLICATION) == NULL);
+    assert(strcmp(placement_action_rejection(MSYS_LAYOUT_MOBILE,
+                    WINDOW_APPLICATION), "profile-not-supported") == 0);
+    assert(strcmp(placement_action_rejection(MSYS_LAYOUT_KIOSK,
+                    WINDOW_APPLICATION), "profile-not-supported") == 0);
+    assert(strcmp(placement_action_rejection(MSYS_LAYOUT_DESKTOP,
+                    WINDOW_NAVIGATION), "action-not-applicable") == 0);
 }
 
 static void test_thumbnail_scaling_and_rgb_masks(void)

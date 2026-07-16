@@ -160,6 +160,30 @@ class WindowPolicyIdentityTests(unittest.TestCase):
             "--window-snap-left", native["window_id"]
         ])
 
+    @mock.patch.object(agent, "window_action")
+    def test_all_desktop_placement_rpc_aliases(
+        self, action: mock.Mock
+    ) -> None:
+        window_id = "msys.x11-window.v1:s:0x5"
+        action.return_value = {
+            "ok": True,
+            "schema": "msys.window-action.v1",
+        }
+        methods = {
+            "maximize_window": "maximize",
+            "restore_window": "restore",
+            "snap_left_window": "snap_left",
+            "snap_right_window": "snap_right",
+        }
+        for method, expected in methods.items():
+            with self.subTest(method=method):
+                self.assertTrue(agent.handle_method(
+                    method, {"window_id": window_id}
+                )["ok"])
+                self.assertEqual(action.call_args.args, (
+                    expected, window_id, {"window_id": window_id}
+                ))
+
     @mock.patch.object(agent, "run")
     def test_stale_window_action_is_typed(self, run: mock.Mock) -> None:
         run.return_value = subprocess.CompletedProcess([], 3, "", "stale")
@@ -1203,6 +1227,21 @@ class DisplaySessionLayoutTests(unittest.TestCase):
         )
         self.assertFalse(agent.emit_method_events(client, "get_layout", {"ok": True}))
         client.event.assert_not_called()
+
+    def test_window_action_event_preserves_actual_geometry(self) -> None:
+        client = mock.Mock(spec=agent.MsysClient)
+        result = {
+            "ok": True,
+            "schema": "msys.window-action.v1",
+            "action": "maximize",
+            "profile": "desktop",
+            "placement": "maximized",
+            "geometry": {"x": 0, "y": 42, "width": 320, "height": 396},
+        }
+        self.assertTrue(agent.emit_method_events(
+            client, "maximize_window", result
+        ))
+        client.event.assert_called_once_with("msys.window.action", result)
 
 
 if __name__ == "__main__":

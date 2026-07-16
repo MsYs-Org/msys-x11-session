@@ -2469,6 +2469,16 @@ static int action_placement(const char *action,
     return 1;
 }
 
+static const char *placement_action_rejection(
+        enum msys_layout_profile profile, enum window_kind kind)
+{
+    if (profile != MSYS_LAYOUT_DESKTOP)
+        return "profile-not-supported";
+    if (kind != WINDOW_APPLICATION)
+        return "action-not-applicable";
+    return NULL;
+}
+
 static int wait_for_window_geometry(Display *display, Window target,
         const struct msys_rect *expected, XWindowAttributes *attributes)
 {
@@ -2543,16 +2553,13 @@ static int window_action_with_result(const char *display_name,
     current_placement = window_placement_get(display, target);
     if (action_placement(action, &requested_placement) ||
             strcmp(action, "restore") == 0) {
-        if (layout.config.profile != MSYS_LAYOUT_DESKTOP) {
+        const char *rejection = placement_action_rejection(
+                layout.config.profile, kind);
+
+        if (rejection) {
             result->returncode = 64;
             action_result_text(result->reason, sizeof(result->reason),
-                    "profile-not-supported");
-            goto done;
-        }
-        if (kind != WINDOW_APPLICATION) {
-            result->returncode = 64;
-            action_result_text(result->reason, sizeof(result->reason),
-                    "action-not-applicable");
+                    rejection);
             goto done;
         }
     }
