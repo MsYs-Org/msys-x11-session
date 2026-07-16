@@ -3,6 +3,7 @@
 #include "msys_x11_policy_api.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 char *msys_x11_policy_list_windows_json(const char *display_name)
