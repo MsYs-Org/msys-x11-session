@@ -135,6 +135,32 @@ class WindowPolicyIdentityTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
 
     @mock.patch.object(agent, "run")
+    def test_desktop_placement_actions_return_native_actual_geometry(
+        self, run: mock.Mock
+    ) -> None:
+        native = {
+            "ok": True,
+            "schema": "msys.window-action.v1",
+            "action": "snap-left",
+            "window_id": "msys.x11-window.v1:s:0x4",
+            "profile": "desktop",
+            "placement": "snap-left",
+            "geometry": {"x": 0, "y": 42, "width": 640, "height": 636},
+            "restore_geometry": {"x": 80, "y": 90, "width": 800, "height": 500},
+            "returncode": 0,
+        }
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, json.dumps(native), ""
+        )
+        result = agent.handle_method(
+            "snap_left_window", {"window_id": native["window_id"]}
+        )
+        self.assertEqual(result, native)
+        self.assertEqual(run.call_args.args[0][-2:], [
+            "--window-snap-left", native["window_id"]
+        ])
+
+    @mock.patch.object(agent, "run")
     def test_stale_window_action_is_typed(self, run: mock.Mock) -> None:
         run.return_value = subprocess.CompletedProcess([], 3, "", "stale")
         result = agent.window_action("focus", "msys.x11-window.v1:old:0x9")

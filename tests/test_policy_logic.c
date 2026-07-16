@@ -491,6 +491,36 @@ static void test_display_session_layout_signal_is_strict(void)
                 &decoded));
 }
 
+static void test_desktop_placement_geometry_is_bounded(void)
+{
+    struct msys_layout_state layout = {0};
+    struct msys_rect rect;
+    struct msys_rect decoded;
+
+    layout.workarea.x = 10;
+    layout.workarea.y = 30;
+    layout.workarea.width = 801;
+    layout.workarea.height = 570;
+    window_placement_target(&layout, WINDOW_PLACEMENT_MAXIMIZED, &rect);
+    assert(rect.x == 10 && rect.y == 30 && rect.width == 801 &&
+            rect.height == 570);
+    window_placement_target(&layout, WINDOW_PLACEMENT_SNAP_LEFT, &rect);
+    assert(rect.x == 10 && rect.width == 401 && rect.height == 570);
+    window_placement_target(&layout, WINDOW_PLACEMENT_SNAP_RIGHT, &rect);
+    assert(rect.x == 411 && rect.width == 400 && rect.height == 570);
+    assert(window_geometry_decode(
+                "msys.window-geometry.v1;x=-20;y=40;width=640;height=480",
+                &decoded));
+    assert(decoded.x == -20 && decoded.y == 40 && decoded.width == 640 &&
+            decoded.height == 480);
+    assert(!window_geometry_decode(
+                "msys.window-geometry.v1;x=0;y=0;width=0;height=480",
+                &decoded));
+    assert(!window_geometry_decode(
+                "msys.window-geometry.v1;x=0;y=0;width=640;height=480;bad=1",
+                &decoded));
+}
+
 static void test_thumbnail_scaling_and_rgb_masks(void)
 {
     int width;
@@ -636,6 +666,7 @@ int main(void)
     test_debug_gesture_cleanup_accepts_an_unopened_xtest_api();
     test_layout_environment_contract_and_legacy_bridge();
     test_display_session_layout_signal_is_strict();
+    test_desktop_placement_geometry_is_bounded();
     test_thumbnail_scaling_and_rgb_masks();
     test_thumbnail_refresh_is_frozen_behind_task_switcher();
     test_concurrent_thumbnail_writers_publish_complete_files();

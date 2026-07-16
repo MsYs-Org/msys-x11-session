@@ -121,6 +121,11 @@ int main(void)
     CHECK(call_and_expect(agent, &peer, packet, 6, "navigation_action",
                 "{\"action\":\"invalid\"}",
                 "invalid-navigation-action"));
+    CHECK(call_and_expect(agent, &peer, packet, 7, "maximize_window",
+                "{\"window_id\":\"msys.x11-window.v1:test:0x42\"}",
+                "\"placement\":\"maximized\""));
+    CHECK(receive(&peer, packet, "event", 1000));
+    CHECK(strstr(packet, "msys.window.action") != NULL);
 
     CHECK(msys_mipc_send_json(&peer, "{\"type\":\"shutdown\"}") ==
             MSYS_MIPC_OK);

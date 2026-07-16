@@ -1023,6 +1023,14 @@ static char *window_action_call(struct msys_x11_agent *agent,
         memcpy(action, "resize", sizeof("resize"));
     else if (strcmp(method, "move_resize_window") == 0)
         memcpy(action, "move-resize", sizeof("move-resize"));
+    else if (strcmp(method, "maximize_window") == 0)
+        memcpy(action, "maximize", sizeof("maximize"));
+    else if (strcmp(method, "restore_window") == 0)
+        memcpy(action, "restore", sizeof("restore"));
+    else if (strcmp(method, "snap_left_window") == 0)
+        memcpy(action, "snap-left", sizeof("snap-left"));
+    else if (strcmp(method, "snap_right_window") == 0)
+        memcpy(action, "snap-right", sizeof("snap-right"));
     else if (strcmp(method, "close_window") == 0)
         memcpy(action, "close", sizeof("close"));
     else
@@ -1082,15 +1090,55 @@ static char *window_action_call(struct msys_x11_agent *agent,
                 !json_get_int(payload, "height", 1, 32767, &height))
             return strdup("{\"ok\":false,\"reason\":\"invalid-geometry\"}");
     }
-    rc = msys_x11_policy_window_action(agent->display, action, window_id,
-            x, y, width, height);
-    quoted = json_quote(window_id);
-    result = quoted ? format_json(
-            "{\"ok\":%s,\"schema\":\"msys.window-action.v1\","
-            "\"action\":\"%s\",\"window_id\":%s,\"returncode\":%d%s}",
-            rc == 0 ? "true" : "false", action, quoted, rc,
-            rc == 3 ? ",\"reason\":\"stale-or-missing-window\"" :
-            rc == 0 ? "" : ",\"reason\":\"x11-action-failed\"") : NULL;
+    {
+        struct msys_x11_window_action_result outcome;
+        char *quoted_action;
+        char *quoted_profile;
+        char *quoted_placement;
+        char *quoted_state;
+        char *quoted_reason;
+        char geometry[160];
+        char restore_geometry[160];
+
+        rc = msys_x11_policy_window_action_result(agent->display, action,
+                window_id, x, y, width, height, &outcome);
+        quoted = json_quote(window_id);
+        quoted_action = json_quote(outcome.action);
+        quoted_profile = json_quote(outcome.profile);
+        quoted_placement = json_quote(outcome.placement);
+        quoted_state = json_quote(outcome.state);
+        quoted_reason = json_quote(outcome.reason);
+        if (outcome.has_geometry)
+            snprintf(geometry, sizeof(geometry),
+                    "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}",
+                    outcome.x, outcome.y, outcome.width, outcome.height);
+        else
+            memcpy(geometry, "null", sizeof("null"));
+        if (outcome.has_restore_geometry)
+            snprintf(restore_geometry, sizeof(restore_geometry),
+                    "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}",
+                    outcome.restore_x, outcome.restore_y,
+                    outcome.restore_width, outcome.restore_height);
+        else
+            memcpy(restore_geometry, "null", sizeof("null"));
+        result = quoted && quoted_action && quoted_profile &&
+                quoted_placement && quoted_state && quoted_reason
+            ? format_json(
+                "{\"ok\":%s,\"schema\":\"msys.window-action.v1\","
+                "\"action\":%s,\"window_id\":%s,\"returncode\":%d,"
+                "\"profile\":%s,\"placement\":%s,\"state\":%s,"
+                "\"geometry\":%s,\"restore_geometry\":%s%s%s%s}",
+                rc == 0 ? "true" : "false", quoted_action, quoted, rc,
+                quoted_profile, quoted_placement, quoted_state, geometry,
+                restore_geometry, *outcome.reason ? ",\"reason\":" : "",
+                *outcome.reason ? quoted_reason : "",
+                *outcome.reason ? "" : "") : NULL;
+        free(quoted_action);
+        free(quoted_profile);
+        free(quoted_placement);
+        free(quoted_state);
+        free(quoted_reason);
+    }
     free(quoted);
     return result;
 }
@@ -1241,6 +1289,9 @@ static void *worker_main(void *opaque)
             free(event);
         }
     }
+    if (result && strstr(result,
+                "\"schema\":\"msys.window-action.v1\"") != NULL)
+        (void)send_event_locked(agent, "msys.window.action", result);
     free(result);
     free(call->payload);
     free(call);

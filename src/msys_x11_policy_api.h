@@ -5,6 +5,7 @@
 
 #define MSYS_X11_SUMMARY_TEXT_MAX 256
 #define MSYS_X11_SUMMARY_ID_MAX 192
+#define MSYS_X11_ACTION_TEXT_MAX 64
 
 struct msys_x11_window_summary {
     char window_id[MSYS_X11_SUMMARY_ID_MAX];
@@ -13,6 +14,26 @@ struct msys_x11_window_summary {
     char component[MSYS_X11_SUMMARY_TEXT_MAX];
     char role[64];
     char kind[32];
+};
+
+struct msys_x11_window_action_result {
+    int returncode;
+    int has_geometry;
+    int has_restore_geometry;
+    int x;
+    int y;
+    int width;
+    int height;
+    int restore_x;
+    int restore_y;
+    int restore_width;
+    int restore_height;
+    char action[32];
+    char window_id[MSYS_X11_SUMMARY_ID_MAX];
+    char profile[16];
+    char placement[32];
+    char state[16];
+    char reason[MSYS_X11_ACTION_TEXT_MAX];
 };
 
 /*
@@ -32,6 +53,10 @@ int msys_x11_policy_window_summary(const char *display_name,
 int msys_x11_policy_window_action(const char *display_name,
         const char *action, const char *window_id,
         int x, int y, int width, int height);
+int msys_x11_policy_window_action_result(const char *display_name,
+        const char *action, const char *window_id,
+        int x, int y, int width, int height,
+        struct msys_x11_window_action_result *result);
 int msys_x11_policy_activate(const char *display_name,
         const char *identity, const char *title);
 int msys_x11_policy_close_identity(const char *display_name,

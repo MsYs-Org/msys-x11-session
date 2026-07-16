@@ -62,6 +62,29 @@ int msys_x11_policy_window_action(const char *display_name,
     return 0;
 }
 
+int msys_x11_policy_window_action_result(const char *display_name,
+        const char *action, const char *window_id,
+        int x, int y, int width, int height,
+        struct msys_x11_window_action_result *result)
+{
+    (void)display_name;
+    (void)x;
+    (void)y;
+    (void)width;
+    (void)height;
+    memset(result, 0, sizeof(*result));
+    snprintf(result->action, sizeof(result->action), "%s", action);
+    snprintf(result->window_id, sizeof(result->window_id), "%s", window_id);
+    snprintf(result->profile, sizeof(result->profile), "desktop");
+    snprintf(result->placement, sizeof(result->placement), "%s",
+            strcmp(action, "maximize") == 0 ? "maximized" : "normal");
+    snprintf(result->state, sizeof(result->state), "visible");
+    result->has_geometry = 1;
+    result->width = 1280;
+    result->height = 660;
+    return 0;
+}
+
 int msys_x11_policy_activate(const char *display_name,
         const char *identity, const char *title)
 {

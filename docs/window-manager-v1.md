@@ -78,6 +78,10 @@ minimize_window({window_id})
 move_window({window_id, x, y})
 resize_window({window_id, width, height})
 move_resize_window({window_id, x, y, width, height})
+maximize_window({window_id})
+restore_window({window_id})
+snap_left_window({window_id})
+snap_right_window({window_id})
 close_window({window_id})
 window_action({action, window_id, ...})
 ```
@@ -96,6 +100,13 @@ native close is used only for external X11 clients.
 
 Typed failure reasons include `invalid-window-id`, `invalid-geometry`,
 `stale-or-missing-window`, `component-stop-failed`, and `x11-action-failed`.
+Maximize and snap are desktop-only application actions. The provider stores the
+pre-placement geometry on the X11 window and clamps it to the current work area
+when restoring. Snap modes are rejected by mobile and kiosk profiles. Successful
+actions report the actual `geometry`, `placement`, `state`, `profile`, and
+optional `restore_geometry`; the same record is published as
+`msys.window.action`. A live profile change reflows existing windows without
+restarting X11 or its selected display-output provider.
 
 ## Navigation and overlay Back
 

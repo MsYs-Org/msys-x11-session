@@ -369,7 +369,10 @@ def close_window(window: XWindow) -> dict:
     }
 
 
-WINDOW_ACTIONS = frozenset({"focus", "minimize", "move", "resize", "move_resize", "close"})
+WINDOW_ACTIONS = frozenset({
+    "focus", "minimize", "move", "resize", "move_resize", "close",
+    "maximize", "restore", "snap_left", "snap_right",
+})
 
 
 def _strict_int(payload: Mapping[str, Any], name: str, minimum: int, maximum: int) -> int:
@@ -439,6 +442,13 @@ def window_action(action: str, window_id: str, payload: Mapping[str, Any] | None
             str(requested["height"]),
         ])
     result = run(argv, timeout=3)
+    if result.stdout.strip():
+        try:
+            native = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            native = None
+        if isinstance(native, dict) and native.get("schema") == "msys.window-action.v1":
+            return native
     response: dict[str, Any] = {
         "ok": result.returncode == 0,
         "schema": "msys.window-action.v1",
@@ -839,9 +849,12 @@ def emit_layout_changed(client: MsysClient, layout: Mapping[str, Any]) -> bool:
 def emit_method_events(
     client: MsysClient, method: str, result: Mapping[str, Any]
 ) -> bool:
-    if method != "set_layout":
-        return False
-    return emit_layout_changed(client, result)
+    if method == "set_layout":
+        return emit_layout_changed(client, result)
+    if result.get("schema") == "msys.window-action.v1":
+        client.event("msys.window.action", dict(result))
+        return True
+    return False
 
 
 def overlay_role(window: XWindow) -> str:
@@ -969,6 +982,10 @@ def handle_window_action(method: str, payload: Mapping[str, Any]) -> dict[str, A
         "move_window": "move",
         "resize_window": "resize",
         "move_resize_window": "move_resize",
+        "maximize_window": "maximize",
+        "restore_window": "restore",
+        "snap_left_window": "snap_left",
+        "snap_right_window": "snap_right",
         "close_window": "close",
     }
     if method == "window_action":

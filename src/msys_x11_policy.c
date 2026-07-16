@@ -42,6 +42,10 @@ static int wm_conflict;
 #define WINDOW_ID_PROPERTY "_MSYS_WINDOW_ID_V1"
 #define WINDOW_ID_SCHEMA "msys.x11-window.v1"
 #define WINDOW_ID_MAX 192
+#define WINDOW_PLACEMENT_PROPERTY "_MSYS_WINDOW_PLACEMENT_V1"
+#define WINDOW_RESTORE_GEOMETRY_PROPERTY "_MSYS_WINDOW_RESTORE_GEOMETRY_V1"
+#define WINDOW_DESKTOP_GEOMETRY_PROPERTY "_MSYS_WINDOW_DESKTOP_GEOMETRY_V1"
+#define WINDOW_GEOMETRY_SCHEMA "msys.window-geometry.v1"
 #define DEBUG_GESTURE_MAX_MS 10000
 #define DEBUG_GESTURE_FRAME_MS 16
 #define THUMBNAIL_DIRECTORY "window-thumbnails"
@@ -137,6 +141,13 @@ enum window_kind {
     WINDOW_NAVIGATION,
     WINDOW_TRANSITION,
     WINDOW_SHIELD
+};
+
+enum window_placement {
+    WINDOW_PLACEMENT_NORMAL = 0,
+    WINDOW_PLACEMENT_MAXIMIZED,
+    WINDOW_PLACEMENT_SNAP_LEFT,
+    WINDOW_PLACEMENT_SNAP_RIGHT
 };
 
 enum window_layer {
@@ -966,6 +977,128 @@ static int overlay_layer_pair_is_ordered(enum window_layer lower,
     return lower <= upper;
 }
 
+static const char *window_placement_name(enum window_placement placement)
+{
+    switch (placement) {
+    case WINDOW_PLACEMENT_MAXIMIZED:
+        return "maximized";
+    case WINDOW_PLACEMENT_SNAP_LEFT:
+        return "snap-left";
+    case WINDOW_PLACEMENT_SNAP_RIGHT:
+        return "snap-right";
+    case WINDOW_PLACEMENT_NORMAL:
+    default:
+        return "normal";
+    }
+}
+
+static enum window_placement window_placement_parse(const char *value)
+{
+    if (value && strcmp(value, "maximized") == 0)
+        return WINDOW_PLACEMENT_MAXIMIZED;
+    if (value && strcmp(value, "snap-left") == 0)
+        return WINDOW_PLACEMENT_SNAP_LEFT;
+    if (value && strcmp(value, "snap-right") == 0)
+        return WINDOW_PLACEMENT_SNAP_RIGHT;
+    return WINDOW_PLACEMENT_NORMAL;
+}
+
+static enum window_placement window_placement_get(Display *display,
+        Window window)
+{
+    char *value = window_property_string(display, window,
+            WINDOW_PLACEMENT_PROPERTY);
+    enum window_placement placement = window_placement_parse(value);
+
+    free(value);
+    return placement;
+}
+
+static int window_geometry_decode(const char *value, struct msys_rect *rect)
+{
+    long x;
+    long y;
+    long width;
+    long height;
+    char trailing;
+
+    if (!value || !rect || sscanf(value,
+                WINDOW_GEOMETRY_SCHEMA ";x=%ld;y=%ld;width=%ld;height=%ld%c",
+                &x, &y, &width, &height, &trailing) != 4 ||
+            x < INT_MIN || x > INT_MAX || y < INT_MIN || y > INT_MAX ||
+            width < 1 || width > 65535 || height < 1 || height > 65535)
+        return 0;
+    rect->x = (int)x;
+    rect->y = (int)y;
+    rect->width = (int)width;
+    rect->height = (int)height;
+    return 1;
+}
+
+static int window_geometry_get(Display *display, Window window,
+        const char *property, struct msys_rect *rect)
+{
+    char *value = window_property_string(display, window, property);
+    int decoded = window_geometry_decode(value, rect);
+
+    free(value);
+    return decoded;
+}
+
+static int window_geometry_set(Display *display, Window window,
+        const char *property_name, const struct msys_rect *rect)
+{
+    Atom property = XInternAtom(display, property_name, False);
+    char value[160];
+    int length = snprintf(value, sizeof(value),
+            WINDOW_GEOMETRY_SCHEMA ";x=%d;y=%d;width=%d;height=%d",
+            rect->x, rect->y, rect->width, rect->height);
+
+    return length >= 0 && (size_t)length < sizeof(value) &&
+        set_text_property(display, window, property, value);
+}
+
+static void window_property_delete(Display *display, Window window,
+        const char *property_name)
+{
+    Atom property = XInternAtom(display, property_name, True);
+
+    if (property != None)
+        XDeleteProperty(display, window, property);
+}
+
+static void window_placement_target(const struct msys_layout_state *layout,
+        enum window_placement placement, struct msys_rect *rect)
+{
+    *rect = layout->workarea;
+    if (placement == WINDOW_PLACEMENT_SNAP_LEFT) {
+        rect->width = (layout->workarea.width + 1) / 2;
+    } else if (placement == WINDOW_PLACEMENT_SNAP_RIGHT) {
+        rect->width = layout->workarea.width / 2;
+        if (rect->width < 1)
+            rect->width = 1;
+        rect->x = layout->workarea.x + layout->workarea.width - rect->width;
+    }
+}
+
+static int load_action_layout(Display *display, Window root,
+        struct msys_layout_state *layout)
+{
+    XWindowAttributes root_attributes;
+    struct msys_layout_config config;
+    char *encoded = window_property_string(display, root,
+            LAYOUT_CONFIG_PROPERTY);
+    int valid = encoded && msys_layout_config_decode(encoded, &config) &&
+        XGetWindowAttributes(display, root, &root_attributes);
+
+    free(encoded);
+    if (!valid)
+        return 0;
+    msys_layout_resolve(&config, root_attributes.width,
+            root_attributes.height, layout);
+    return 1;
+}
+
 static void layout_window(Display *display, Window window,
         const struct msys_layout_state *layout,
         const XConfigureRequestEvent *request)
@@ -999,8 +1132,28 @@ static void layout_window(Display *display, Window window,
     requested.height = request && (request->value_mask & CWHeight)
         ? request->height
         : attributes.height;
-    msys_layout_place(layout, surface_for_window_kind(kind), &requested,
-            &result);
+    if (kind == WINDOW_APPLICATION &&
+            layout->config.profile == MSYS_LAYOUT_DESKTOP) {
+        enum window_placement placement = window_placement_get(display,
+                window);
+        struct msys_rect desktop_geometry;
+
+        if (placement != WINDOW_PLACEMENT_NORMAL) {
+            window_placement_target(layout, placement, &result);
+        } else if (window_geometry_get(display, window,
+                    WINDOW_DESKTOP_GEOMETRY_PROPERTY, &desktop_geometry)) {
+            msys_layout_place(layout, MSYS_SURFACE_APPLICATION,
+                    &desktop_geometry, &result);
+            window_property_delete(display, window,
+                    WINDOW_DESKTOP_GEOMETRY_PROPERTY);
+        } else {
+            msys_layout_place(layout, MSYS_SURFACE_APPLICATION, &requested,
+                    &result);
+        }
+    } else {
+        msys_layout_place(layout, surface_for_window_kind(kind), &requested,
+                &result);
+    }
     /* Re-sending identical geometry causes real Configure/Expose traffic in
      * Tk, Qt and Electron.  On the single-bbox SPI path that tiny metadata
      * event can then be merged with a distant key press into a near-full
@@ -1261,6 +1414,51 @@ static void manage_existing(Display *display, Window root,
         }
     }
     raise_system_overlays(display, root);
+    if (children)
+        XFree(children);
+}
+
+static void remember_desktop_geometries(Display *display, Window root,
+        const struct msys_layout_state *layout)
+{
+    Window root_return;
+    Window parent_return;
+    Window *children = NULL;
+    unsigned int count = 0;
+    unsigned int i;
+
+    if (!layout || layout->config.profile != MSYS_LAYOUT_DESKTOP ||
+            !XQueryTree(display, root, &root_return, &parent_return,
+                &children, &count))
+        return;
+    for (i = 0; i < count; i++) {
+        XWindowAttributes attributes;
+        struct window_metadata metadata;
+        struct msys_rect current;
+
+        if (!XGetWindowAttributes(display, children[i], &attributes) ||
+                attributes.class == InputOnly || attributes.width < 1 ||
+                attributes.height < 1)
+            continue;
+        load_window_metadata(display, children[i], &metadata);
+        if (classify_window(&metadata) != WINDOW_APPLICATION ||
+                (attributes.override_redirect &&
+                 !window_kind_allows_override_redirect(WINDOW_APPLICATION)) ||
+                window_placement_get(display, children[i]) !=
+                    WINDOW_PLACEMENT_NORMAL) {
+            free_window_metadata(&metadata);
+            continue;
+        }
+        current.x = attributes.x;
+        current.y = attributes.y;
+        current.width = attributes.width;
+        current.height = attributes.height;
+        msys_layout_place(layout, MSYS_SURFACE_APPLICATION, &current,
+                &current);
+        (void)window_geometry_set(display, children[i],
+                WINDOW_DESKTOP_GEOMETRY_PROPERTY, &current);
+        free_window_metadata(&metadata);
+    }
     if (children)
         XFree(children);
 }
@@ -2198,24 +2396,165 @@ int msys_x11_policy_window_summary(const char *display_name,
     return 1;
 }
 
-static int window_action(const char *display_name, const char *action,
-        const char *window_id, int x, int y, int width, int height)
+static void action_result_text(char *target, size_t size, const char *value)
 {
+    if (size == 0)
+        return;
+    snprintf(target, size, "%s", value ? value : "");
+}
+
+static void action_result_initialize(struct msys_x11_window_action_result *result,
+        const char *action, const char *window_id)
+{
+    memset(result, 0, sizeof(*result));
+    result->returncode = 1;
+    action_result_text(result->action, sizeof(result->action), action);
+    action_result_text(result->window_id, sizeof(result->window_id), window_id);
+    action_result_text(result->placement, sizeof(result->placement), "normal");
+    action_result_text(result->state, sizeof(result->state), "unknown");
+}
+
+static void action_result_geometry(
+        struct msys_x11_window_action_result *result,
+        const XWindowAttributes *attributes)
+{
+    result->has_geometry = 1;
+    result->x = attributes->x;
+    result->y = attributes->y;
+    result->width = attributes->width;
+    result->height = attributes->height;
+}
+
+static void action_result_restore_geometry(
+        struct msys_x11_window_action_result *result,
+        const struct msys_rect *rect)
+{
+    result->has_restore_geometry = 1;
+    result->restore_x = rect->x;
+    result->restore_y = rect->y;
+    result->restore_width = rect->width;
+    result->restore_height = rect->height;
+}
+
+static int set_window_placement(Display *display, Window window,
+        enum window_placement placement)
+{
+    Atom property = XInternAtom(display, WINDOW_PLACEMENT_PROPERTY, False);
+
+    if (placement == WINDOW_PLACEMENT_NORMAL) {
+        window_property_delete(display, window, WINDOW_PLACEMENT_PROPERTY);
+        return 1;
+    }
+    return set_text_property(display, window, property,
+            window_placement_name(placement));
+}
+
+static int action_is_geometry(const char *action)
+{
+    return strcmp(action, "move") == 0 || strcmp(action, "resize") == 0 ||
+        strcmp(action, "move-resize") == 0;
+}
+
+static int action_placement(const char *action,
+        enum window_placement *placement)
+{
+    if (strcmp(action, "maximize") == 0)
+        *placement = WINDOW_PLACEMENT_MAXIMIZED;
+    else if (strcmp(action, "snap-left") == 0)
+        *placement = WINDOW_PLACEMENT_SNAP_LEFT;
+    else if (strcmp(action, "snap-right") == 0)
+        *placement = WINDOW_PLACEMENT_SNAP_RIGHT;
+    else
+        return 0;
+    return 1;
+}
+
+static int wait_for_window_geometry(Display *display, Window target,
+        const struct msys_rect *expected, XWindowAttributes *attributes)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 50; attempt++) {
+        struct timespec delay = {0, 10 * 1000 * 1000};
+
+        if (XGetWindowAttributes(display, target, attributes) &&
+                (!expected ||
+                 (attributes->x == expected->x &&
+                  attributes->y == expected->y &&
+                  attributes->width == expected->width &&
+                  attributes->height == expected->height)))
+            return 1;
+        nanosleep(&delay, NULL);
+    }
+    return 0;
+}
+
+static int window_action_with_result(const char *display_name,
+        const char *raw_action, const char *window_id,
+        int x, int y, int width, int height,
+        struct msys_x11_window_action_result *result)
+{
+    const char *action = strcmp(raw_action, "move_resize") == 0
+        ? "move-resize" : raw_action;
     Display *display;
     Window root;
     Window target;
     XWindowAttributes attributes;
+    struct msys_layout_state layout;
+    struct msys_rect requested;
+    struct msys_rect expected;
+    struct msys_rect restore;
+    struct window_metadata metadata;
+    enum window_placement requested_placement = WINDOW_PLACEMENT_NORMAL;
+    enum window_placement current_placement;
+    enum window_kind kind;
+    int has_expected = 0;
     int attempt;
 
+    action_result_initialize(result, action, window_id);
     display = open_action_display(display_name);
-    if (!display)
-        return 1;
+    if (!display) {
+        action_result_text(result->reason, sizeof(result->reason),
+                "x11-unavailable");
+        return result->returncode;
+    }
     root = DefaultRootWindow(display);
     target = resolve_window_id(display, root, window_id);
     if (target == None) {
-        fprintf(stderr, "msys-x11-policy: stale or missing window id\n");
+        result->returncode = 3;
+        action_result_text(result->reason, sizeof(result->reason),
+                "stale-or-missing-window");
         XCloseDisplay(display);
-        return 3;
+        return result->returncode;
+    }
+    if (!XGetWindowAttributes(display, target, &attributes) ||
+            !load_action_layout(display, root, &layout)) {
+        result->returncode = 4;
+        action_result_text(result->reason, sizeof(result->reason),
+                "x11-action-failed");
+        XCloseDisplay(display);
+        return result->returncode;
+    }
+    action_result_text(result->profile, sizeof(result->profile),
+            msys_layout_profile_name(layout.config.profile));
+    load_window_metadata(display, target, &metadata);
+    kind = classify_window(&metadata);
+    free_window_metadata(&metadata);
+    current_placement = window_placement_get(display, target);
+    if (action_placement(action, &requested_placement) ||
+            strcmp(action, "restore") == 0) {
+        if (layout.config.profile != MSYS_LAYOUT_DESKTOP) {
+            result->returncode = 64;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "profile-not-supported");
+            goto done;
+        }
+        if (kind != WINDOW_APPLICATION) {
+            result->returncode = 64;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "action-not-applicable");
+            goto done;
+        }
     }
     if (strcmp(action, "focus") == 0) {
         set_window_wm_state(display, target, NormalState);
@@ -2230,9 +2569,10 @@ static int window_action(const char *display_name, const char *action,
             nanosleep(&delay, NULL);
         }
         if (attempt == 50) {
-            fprintf(stderr, "msys-x11-policy: window did not become viewable\n");
-            XCloseDisplay(display);
-            return 4;
+            result->returncode = 4;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "x11-action-failed");
+            goto done;
         }
         XRaiseWindow(display, target);
         XSetInputFocus(display, target, RevertToPointerRoot, CurrentTime);
@@ -2240,26 +2580,148 @@ static int window_action(const char *display_name, const char *action,
     } else if (strcmp(action, "minimize") == 0) {
         set_window_wm_state(display, target, IconicState);
         XUnmapWindow(display, target);
-    } else if (strcmp(action, "move") == 0) {
-        XMoveWindow(display, target, x, y);
-    } else if (strcmp(action, "resize") == 0) {
-        XResizeWindow(display, target, (unsigned int)width,
-                (unsigned int)height);
-    } else if (strcmp(action, "move-resize") == 0) {
-        XMoveResizeWindow(display, target, x, y, (unsigned int)width,
-                (unsigned int)height);
+    } else if (action_is_geometry(action)) {
+        requested.x = strcmp(action, "resize") == 0 ? attributes.x : x;
+        requested.y = strcmp(action, "resize") == 0 ? attributes.y : y;
+        requested.width = strcmp(action, "move") == 0
+            ? attributes.width : width;
+        requested.height = strcmp(action, "move") == 0
+            ? attributes.height : height;
+        msys_layout_place(&layout, surface_for_window_kind(kind), &requested,
+                &expected);
+        has_expected = 1;
+        if (kind == WINDOW_APPLICATION) {
+            (void)set_window_placement(display, target,
+                    WINDOW_PLACEMENT_NORMAL);
+            window_property_delete(display, target,
+                    WINDOW_RESTORE_GEOMETRY_PROPERTY);
+        }
+        XMoveResizeWindow(display, target, expected.x, expected.y,
+                (unsigned int)expected.width, (unsigned int)expected.height);
+    } else if (action_placement(action, &requested_placement)) {
+        if (current_placement == WINDOW_PLACEMENT_NORMAL) {
+            restore.x = attributes.x;
+            restore.y = attributes.y;
+            restore.width = attributes.width;
+            restore.height = attributes.height;
+            msys_layout_place(&layout, MSYS_SURFACE_APPLICATION, &restore,
+                    &restore);
+            if (!window_geometry_set(display, target,
+                        WINDOW_RESTORE_GEOMETRY_PROPERTY, &restore)) {
+                result->returncode = 4;
+                action_result_text(result->reason, sizeof(result->reason),
+                        "x11-action-failed");
+                goto done;
+            }
+        }
+        if (!set_window_placement(display, target, requested_placement)) {
+            result->returncode = 4;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "x11-action-failed");
+            goto done;
+        }
+        window_placement_target(&layout, requested_placement, &expected);
+        has_expected = 1;
+        XMoveResizeWindow(display, target, expected.x, expected.y,
+                (unsigned int)expected.width, (unsigned int)expected.height);
+    } else if (strcmp(action, "restore") == 0) {
+        if (current_placement == WINDOW_PLACEMENT_NORMAL ||
+                !window_geometry_get(display, target,
+                    WINDOW_RESTORE_GEOMETRY_PROPERTY, &restore)) {
+            result->returncode = 64;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "no-restore-geometry");
+            goto done;
+        }
+        msys_layout_place(&layout, MSYS_SURFACE_APPLICATION, &restore,
+                &expected);
+        has_expected = 1;
+        (void)set_window_placement(display, target, WINDOW_PLACEMENT_NORMAL);
+        window_property_delete(display, target,
+                WINDOW_RESTORE_GEOMETRY_PROPERTY);
+        XMoveResizeWindow(display, target, expected.x, expected.y,
+                (unsigned int)expected.width, (unsigned int)expected.height);
     } else if (strcmp(action, "close") == 0) {
         if (!request_window_close(display, target)) {
-            XCloseDisplay(display);
-            return 4;
+            result->returncode = 4;
+            action_result_text(result->reason, sizeof(result->reason),
+                    "x11-action-failed");
+            goto done;
         }
     } else {
-        XCloseDisplay(display);
-        return 64;
+        result->returncode = 64;
+        action_result_text(result->reason, sizeof(result->reason),
+                "invalid-action");
+        goto done;
     }
     XSync(display, False);
+    if (has_expected && !wait_for_window_geometry(display, target, &expected,
+                &attributes)) {
+        result->returncode = 4;
+        action_result_text(result->reason, sizeof(result->reason),
+                "geometry-not-applied");
+        goto done;
+    }
+    result->returncode = 0;
+
+done:
+    if (XGetWindowAttributes(display, target, &attributes)) {
+        action_result_geometry(result, &attributes);
+        action_result_text(result->state, sizeof(result->state),
+                window_state_name(display, target, &attributes));
+    } else if (strcmp(action, "close") == 0 && result->returncode == 0) {
+        action_result_text(result->state, sizeof(result->state), "closed");
+    }
+    current_placement = window_placement_get(display, target);
+    action_result_text(result->placement, sizeof(result->placement),
+            window_placement_name(current_placement));
+    if (window_geometry_get(display, target,
+                WINDOW_RESTORE_GEOMETRY_PROPERTY, &restore))
+        action_result_restore_geometry(result, &restore);
+    XSync(display, False);
     XCloseDisplay(display);
-    return 0;
+    return result->returncode;
+}
+
+static int window_action(const char *display_name, const char *action,
+        const char *window_id, int x, int y, int width, int height)
+{
+    struct msys_x11_window_action_result result;
+
+    return window_action_with_result(display_name, action, window_id,
+            x, y, width, height, &result);
+}
+
+static int print_window_action_result(const char *display_name,
+        const char *action, const char *window_id,
+        int x, int y, int width, int height)
+{
+    struct msys_x11_window_action_result result;
+    int rc = window_action_with_result(display_name, action, window_id,
+            x, y, width, height, &result);
+
+    printf("{\"ok\":%s,\"schema\":\"msys.window-action.v1\","
+            "\"action\":\"%s\",\"window_id\":\"%s\",\"returncode\":%d,"
+            "\"profile\":\"%s\",\"placement\":\"%s\","
+            "\"state\":\"%s\",\"geometry\":",
+            rc == 0 ? "true" : "false", result.action, result.window_id, rc,
+            result.profile, result.placement, result.state);
+    if (result.has_geometry)
+        printf("{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}",
+                result.x, result.y, result.width, result.height);
+    else
+        fputs("null", stdout);
+    fputs(",\"restore_geometry\":", stdout);
+    if (result.has_restore_geometry)
+        printf("{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}",
+                result.restore_x, result.restore_y, result.restore_width,
+                result.restore_height);
+    else
+        fputs("null", stdout);
+    if (*result.reason)
+        printf(",\"reason\":\"%s\"", result.reason);
+    puts("}");
+    return rc;
 }
 
 static int raise_window(const char *display_name, const char *identity,
@@ -2856,6 +3318,10 @@ static void apply_layout(Display *display, Window root,
         const struct msys_layout_config *config, int width, int height,
         Atom effective_property, struct msys_layout_state *state)
 {
+    if (state->screen_width > 0 &&
+            state->config.profile == MSYS_LAYOUT_DESKTOP &&
+            config->profile != MSYS_LAYOUT_DESKTOP)
+        remember_desktop_geometries(display, root, state);
     msys_layout_resolve(config, width, height, state);
     publish_layout_effective(display, root, effective_property, state);
     fprintf(stdout,
@@ -3130,6 +3596,17 @@ int msys_x11_policy_window_action(const char *display_name,
             x, y, width, height);
 }
 
+int msys_x11_policy_window_action_result(const char *display_name,
+        const char *action, const char *window_id,
+        int x, int y, int width, int height,
+        struct msys_x11_window_action_result *result)
+{
+    if (!result)
+        return 64;
+    return window_action_with_result(display_name, action, window_id,
+            x, y, width, height, result);
+}
+
 int msys_x11_policy_activate(const char *display_name,
         const char *identity, const char *title)
 {
@@ -3174,6 +3651,8 @@ static void print_usage(const char *program)
     fprintf(stderr,
             "usage: %s [--list-windows | --window-focus WINDOW_ID | "
             "--window-minimize WINDOW_ID | --window-close WINDOW_ID | "
+            "--window-maximize WINDOW_ID | --window-restore WINDOW_ID | "
+            "--window-snap-left WINDOW_ID | --window-snap-right WINDOW_ID | "
             "--window-move WINDOW_ID X Y | --window-resize WINDOW_ID W H | "
             "--window-move-resize WINDOW_ID X Y W H | "
             "--raise-title TITLE | --raise-identity ID | "
@@ -3195,7 +3674,7 @@ int main(int argc, char **argv)
 {
     const char *display_name = getenv("DISPLAY");
     struct msys_layout_config layout_config;
-    struct msys_layout_state layout_state;
+    struct msys_layout_state layout_state = {0};
     Display *display;
     Window root;
     Atom layout_config_property;
@@ -3236,19 +3715,34 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--list-windows") == 0)
         return print_windows_action(display_name);
     if (argc == 3 && strcmp(argv[1], "--window-focus") == 0)
-        return window_action(display_name, "focus", argv[2], 0, 0, 0, 0);
+        return print_window_action_result(display_name, "focus", argv[2],
+                0, 0, 0, 0);
     if (argc == 3 && strcmp(argv[1], "--window-minimize") == 0)
-        return window_action(display_name, "minimize", argv[2], 0, 0, 0, 0);
+        return print_window_action_result(display_name, "minimize", argv[2],
+                0, 0, 0, 0);
     if (argc == 3 && strcmp(argv[1], "--window-close") == 0)
-        return window_action(display_name, "close", argv[2], 0, 0, 0, 0);
+        return print_window_action_result(display_name, "close", argv[2],
+                0, 0, 0, 0);
+    if (argc == 3 && strcmp(argv[1], "--window-maximize") == 0)
+        return print_window_action_result(display_name, "maximize", argv[2],
+                0, 0, 0, 0);
+    if (argc == 3 && strcmp(argv[1], "--window-restore") == 0)
+        return print_window_action_result(display_name, "restore", argv[2],
+                0, 0, 0, 0);
+    if (argc == 3 && strcmp(argv[1], "--window-snap-left") == 0)
+        return print_window_action_result(display_name, "snap-left", argv[2],
+                0, 0, 0, 0);
+    if (argc == 3 && strcmp(argv[1], "--window-snap-right") == 0)
+        return print_window_action_result(display_name, "snap-right", argv[2],
+                0, 0, 0, 0);
     if (argc == 5 && strcmp(argv[1], "--window-move") == 0) {
         if (!parse_signed_coordinate(argv[3], &action_x) ||
                 !parse_signed_coordinate(argv[4], &action_y)) {
             print_usage(argv[0]);
             return 64;
         }
-        return window_action(display_name, "move", argv[2], action_x,
-                action_y, 0, 0);
+        return print_window_action_result(display_name, "move", argv[2],
+                action_x, action_y, 0, 0);
     }
     if (argc == 5 && strcmp(argv[1], "--window-resize") == 0) {
         if (!parse_dimension(argv[3], &action_width) ||
@@ -3256,8 +3750,8 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 64;
         }
-        return window_action(display_name, "resize", argv[2], 0, 0,
-                action_width, action_height);
+        return print_window_action_result(display_name, "resize", argv[2],
+                0, 0, action_width, action_height);
     }
     if (argc == 7 && strcmp(argv[1], "--window-move-resize") == 0) {
         if (!parse_signed_coordinate(argv[3], &action_x) ||
@@ -3267,8 +3761,8 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 64;
         }
-        return window_action(display_name, "move-resize", argv[2], action_x,
-                action_y, action_width, action_height);
+        return print_window_action_result(display_name, "move-resize", argv[2],
+                action_x, action_y, action_width, action_height);
     }
     if (argc == 3 && strcmp(argv[1], "--raise-title") == 0)
         return raise_window(display_name, NULL, argv[2]);
