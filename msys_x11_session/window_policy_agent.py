@@ -880,8 +880,15 @@ def dismiss_top_overlay() -> dict[str, Any] | None:
         return None
     method = "cancel_choice" if role == "chooser" else "hide"
     timeout = 2 if role == "chooser" else 3
+    payload = (
+        {"reason": "navigation-back", "restore_target": False}
+        if role == "input-method"
+        else {}
+    )
     try:
-        response = MsysClient.public_call(f"role:{role}", method, {}, timeout=timeout)
+        response = MsysClient.public_call(
+            f"role:{role}", method, payload, timeout=timeout
+        )
     except Exception as exc:
         return {
             "ok": False,

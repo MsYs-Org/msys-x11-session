@@ -770,9 +770,13 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
     char *payload;
     char *quoted;
     char *result;
+    const char *dismiss_payload;
 
     if (msys_x11_policy_top_window(agent->display, 1, &window) == 1 &&
             is_dismissible_role(window.role)) {
+        dismiss_payload = strcmp(window.role, "input-method") == 0
+            ? "{\"reason\":\"navigation-back\",\"restore_target\":false}"
+            : "{}";
         payload = public_payload(public_call(agent,
                 strcmp(window.role, "chooser") == 0 ? "role:chooser" :
                 strcmp(window.role, "notification-center") == 0 ?
@@ -781,7 +785,7 @@ static char *back_action(struct msys_x11_agent *agent, int navigate_app)
                     "role:task-switcher" :
                 strcmp(window.role, "input-method") == 0 ?
                     "role:input-method" : "role:screen-shield",
-                overlay_method(window.role), "{}", 3000));
+                overlay_method(window.role), dismiss_payload, 3000));
         if (!payload)
             return strdup("{\"ok\":false,\"reason\":\"overlay-dismiss-failed\"}");
         quoted = json_quote(window.role);

@@ -539,7 +539,12 @@ class WindowPolicyIdentityTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["dismissed"], "input-method")
-        call.assert_called_once_with("role:input-method", "hide", {}, timeout=3)
+        call.assert_called_once_with(
+            "role:input-method",
+            "hide",
+            {"reason": "navigation-back", "restore_target": False},
+            timeout=3,
+        )
 
     @mock.patch.object(agent.MsysClient, "public_call")
     @mock.patch.object(agent, "list_windows")
@@ -561,7 +566,12 @@ class WindowPolicyIdentityTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "overlay-dismiss-failed")
         self.assertEqual(result["dismissed"], "input-method")
-        call.assert_called_once_with("role:input-method", "hide", {}, timeout=3)
+        call.assert_called_once_with(
+            "role:input-method",
+            "hide",
+            {"reason": "navigation-back", "restore_target": False},
+            timeout=3,
+        )
 
     def test_back_overlay_only_does_not_change_application_destination(self) -> None:
         dismissed = {

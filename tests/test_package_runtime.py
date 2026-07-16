@@ -144,6 +144,8 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertIn('return back_action(agent, 1);', agent)
         self.assertIn('return back_action(agent, 0);', agent)
         self.assertIn('delegated = back_action(agent, 1);', agent)
+        self.assertIn(r'\"reason\":\"navigation-back\"', agent)
+        self.assertIn(r'\"restore_target\":false', agent)
 
     def test_ch347_wrapper_prefers_a_package_owned_x11display_tree(self) -> None:
         source = (ROOT / "scripts" / "msys_ch347_x11_provider.sh").read_text(
