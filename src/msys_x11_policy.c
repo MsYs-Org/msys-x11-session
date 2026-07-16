@@ -34,6 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
+#define MSYS_X11_POLICY_VERSION "0.2.17"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -3656,7 +3657,7 @@ int msys_x11_policy_sync_display(const char *display_name,
 static void print_usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [--list-windows | --window-focus WINDOW_ID | "
+            "usage: %s [--version | --list-windows | --window-focus WINDOW_ID | "
             "--window-minimize WINDOW_ID | --window-close WINDOW_ID | "
             "--window-maximize WINDOW_ID | --window-restore WINDOW_ID | "
             "--window-snap-left WINDOW_ID | --window-snap-right WINDOW_ID | "
@@ -3710,6 +3711,11 @@ int main(int argc, char **argv)
     struct msys_x11_agent *agent = NULL;
     int agent_result = 0;
     int exit_status = 0;
+
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        puts(MSYS_X11_POLICY_VERSION);
+        return 0;
+    }
 
     /* Native mIPC calls are handled by bounded worker threads so role calls
      * may re-enter activate_component/recents without deadlocking the private

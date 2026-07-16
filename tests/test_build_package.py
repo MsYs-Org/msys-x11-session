@@ -27,7 +27,7 @@ class PackageBuilderTests(unittest.TestCase):
         version = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))[
             "package"
         ]["version"]
-        self.assertEqual(version, "0.2.16")
+        self.assertEqual(version, "0.2.17")
         self.assertIn(
             f"PACKAGE_VERSION := {version}",
             (ROOT / "Makefile").read_text(encoding="utf-8"),
@@ -35,6 +35,19 @@ class PackageBuilderTests(unittest.TestCase):
         self.assertIn(
             f'version = "{version}"',
             (ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        )
+        policy_source = (ROOT / "src" / "msys_x11_policy.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            f'#define MSYS_X11_POLICY_VERSION "{version}"',
+            policy_source,
+        )
+        self.assertIn('strcmp(argv[1], "--version") == 0', policy_source)
+        self.assertIn("puts(MSYS_X11_POLICY_VERSION);", policy_source)
+        self.assertIn(
+            f"dist/org.msys.x11.session-{version}.tar.gz",
+            (ROOT / "README.md").read_text(encoding="utf-8"),
         )
 
     def test_archive_contains_only_runtime_tree_and_runs_isolated(self) -> None:
@@ -58,7 +71,7 @@ class PackageBuilderTests(unittest.TestCase):
             binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
 
             archive = BUILD_PACKAGE.build(fixture)
-            self.assertEqual(archive.name, "org.msys.x11.session-0.2.16.tar.gz")
+            self.assertEqual(archive.name, "org.msys.x11.session-0.2.17.tar.gz")
             with tarfile.open(archive, "r:gz") as bundle:
                 names = set(bundle.getnames())
                 self.assertIn("manifest.json", names)
