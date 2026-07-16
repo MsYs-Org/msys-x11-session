@@ -1,9 +1,20 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+static pthread_barrier_t thumbnail_writer_barrier;
+static int thumbnail_writer_barrier_enabled;
+
+static XImage *test_XGetImage(Display *display, Drawable drawable, int x,
+        int y, unsigned int width, unsigned int height, unsigned long plane_mask,
+        int format);
 
 enum cleanup_event {
     CLEANUP_DISPLAY = 1,
@@ -30,12 +41,54 @@ static int test_dlclose(void *library)
 }
 
 #define XCloseDisplay test_XCloseDisplay
+#define XGetImage test_XGetImage
 #define dlclose test_dlclose
 #define main msys_x11_policy_program_main
 #include "../src/msys_x11_policy.c"
 #undef main
 #undef dlclose
+#undef XGetImage
 #undef XCloseDisplay
+
+static unsigned long test_thumbnail_get_pixel(XImage *image, int x, int y)
+{
+    if (thumbnail_writer_barrier_enabled && x == 0 && y == 0) {
+        int result = pthread_barrier_wait(&thumbnail_writer_barrier);
+
+        assert(result == 0 || result == PTHREAD_BARRIER_SERIAL_THREAD);
+    }
+    (void)image;
+    return 0x00204060UL;
+}
+
+static int test_thumbnail_destroy_image(XImage *image)
+{
+    free(image);
+    return 1;
+}
+
+static XImage *test_XGetImage(Display *display, Drawable drawable, int x,
+        int y, unsigned int width, unsigned int height, unsigned long plane_mask,
+        int format)
+{
+    XImage *image = calloc(1, sizeof(*image));
+
+    assert(image != NULL);
+    image->width = (int)width;
+    image->height = (int)height;
+    image->red_mask = 0x00ff0000UL;
+    image->green_mask = 0x0000ff00UL;
+    image->blue_mask = 0x000000ffUL;
+    image->f.get_pixel = test_thumbnail_get_pixel;
+    image->f.destroy_image = test_thumbnail_destroy_image;
+    (void)display;
+    (void)drawable;
+    (void)x;
+    (void)y;
+    (void)plane_mask;
+    (void)format;
+    return image;
+}
 
 static struct window_metadata metadata(const char *title, const char *wm_class,
         const char *app_id, const char *component_id, const char *role)
@@ -482,6 +535,87 @@ static void test_thumbnail_refresh_is_frozen_behind_task_switcher(void)
     assert(!thumbnail_rectangles_overlap(&left, &right));
 }
 
+#define THUMBNAIL_WRITER_COUNT 12
+
+struct thumbnail_writer_context {
+    const char *path;
+    XWindowAttributes attributes;
+    int result;
+};
+
+static void *thumbnail_writer_main(void *opaque)
+{
+    struct thumbnail_writer_context *context = opaque;
+
+    context->result = write_window_thumbnail(NULL, 0x42,
+            &context->attributes, context->path);
+    return NULL;
+}
+
+static void test_concurrent_thumbnail_writers_publish_complete_files(void)
+{
+    char directory[] = "/tmp/msys-x11-thumbnail-XXXXXX";
+    char path[PATH_MAX];
+    char temporary[PATH_MAX];
+    char header[64];
+    struct thumbnail_writer_context contexts[THUMBNAIL_WRITER_COUNT];
+    pthread_t writers[THUMBNAIL_WRITER_COUNT];
+    struct stat status;
+    FILE *stream;
+    char magic[2];
+    int descriptor;
+    int header_length;
+    int width;
+    int height;
+    int i;
+
+    assert(mkdtemp(directory) != NULL);
+    assert(snprintf(path, sizeof(path), "%s/window.ppm", directory) > 0);
+
+    /* The unique temporary helper itself preserves close-on-exec and owns a
+     * same-directory name that only its caller may remove. */
+    descriptor = thumbnail_temporary_open(path, temporary, sizeof(temporary));
+    assert(descriptor >= 0);
+    assert((fcntl(descriptor, F_GETFD) & FD_CLOEXEC) != 0);
+    assert(close(descriptor) == 0);
+    assert(unlink(temporary) == 0);
+
+    assert(pthread_barrier_init(&thumbnail_writer_barrier, NULL,
+                THUMBNAIL_WRITER_COUNT) == 0);
+    thumbnail_writer_barrier_enabled = 1;
+    for (i = 0; i < THUMBNAIL_WRITER_COUNT; i++) {
+        memset(&contexts[i], 0, sizeof(contexts[i]));
+        contexts[i].path = path;
+        contexts[i].attributes.map_state = IsViewable;
+        contexts[i].attributes.width = 64;
+        contexts[i].attributes.height = 32;
+        assert(pthread_create(&writers[i], NULL, thumbnail_writer_main,
+                    &contexts[i]) == 0);
+    }
+    for (i = 0; i < THUMBNAIL_WRITER_COUNT; i++) {
+        assert(pthread_join(writers[i], NULL) == 0);
+        /* A shared PID-only temporary name makes all but the first rename fail
+         * after one writer steals the live pathname. */
+        assert(contexts[i].result == 1);
+    }
+    thumbnail_writer_barrier_enabled = 0;
+    assert(pthread_barrier_destroy(&thumbnail_writer_barrier) == 0);
+
+    thumbnail_dimensions(64, 32, &width, &height);
+    header_length = snprintf(header, sizeof(header), "P6\n%d %d\n255\n",
+            width, height);
+    assert(header_length > 0 && (size_t)header_length < sizeof(header));
+    assert(stat(path, &status) == 0 && S_ISREG(status.st_mode));
+    assert(status.st_size == (off_t)header_length + (off_t)width * height * 3);
+    stream = fopen(path, "rb");
+    assert(stream != NULL);
+    assert(fread(magic, 1, sizeof(magic), stream) == sizeof(magic));
+    assert(memcmp(magic, "P6", sizeof(magic)) == 0);
+    assert(fclose(stream) == 0);
+    assert(unlink(path) == 0);
+    assert(rmdir(directory) == 0);
+}
+
 int main(void)
 {
     test_metadata_damage_filters();
@@ -504,6 +638,7 @@ int main(void)
     test_display_session_layout_signal_is_strict();
     test_thumbnail_scaling_and_rgb_masks();
     test_thumbnail_refresh_is_frozen_behind_task_switcher();
+    test_concurrent_thumbnail_writers_publish_complete_files();
     puts("test_policy_logic: ok");
     return 0;
 }

@@ -1,5 +1,9 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include "msys_layout.h"
 #include "msys_x11_agent.h"
@@ -1523,6 +1527,30 @@ static int thumbnail_refresh_allowed(int map_state,
         !task_surface_above;
 }
 
+static int thumbnail_temporary_open(const char *path, char *temporary,
+        size_t capacity)
+{
+    int written;
+
+    if (!path || !temporary || capacity == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    temporary[0] = '\0';
+    written = snprintf(temporary, capacity, "%s.tmp.XXXXXX", path);
+    if (written < 0 || (size_t)written >= capacity) {
+        temporary[0] = '\0';
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    /* Every capture owns a distinct name in the destination directory.  A
+     * PID-only name lets concurrent mIPC workers unlink one another's open
+     * inode and can make rename() publish a file that another worker is still
+     * writing.  mkostemp keeps the atomic same-filesystem rename contract and
+     * O_CLOEXEC prevents the private descriptor leaking into child tools. */
+    return mkostemp(temporary, O_CLOEXEC);
+}
+
 static int write_window_thumbnail(Display *display, Window window,
         const XWindowAttributes *attributes, const char *path)
 {
@@ -1535,6 +1563,7 @@ static int write_window_thumbnail(Display *display, Window window,
     int height;
     int y;
     int ok = 0;
+    int temporary_owned = 0;
 
     if (attributes->map_state != IsViewable || attributes->width < 1 ||
             attributes->height < 1 || attributes->width > 32767 ||
@@ -1554,20 +1583,10 @@ static int write_window_thumbnail(Display *display, Window window,
     row = malloc((size_t)width * 3u);
     if (!row)
         goto cleanup;
-    if (snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", path,
-                (long)getpid()) >= (int)sizeof(temporary))
+    descriptor = thumbnail_temporary_open(path, temporary, sizeof(temporary));
+    if (descriptor < 0)
         goto cleanup;
-    descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-            0600);
-    if (descriptor < 0) {
-        if (errno != EEXIST)
-            goto cleanup;
-        unlink(temporary);
-        descriptor = open(temporary,
-                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-        if (descriptor < 0)
-            goto cleanup;
-    }
+    temporary_owned = 1;
     stream = fdopen(descriptor, "wb");
     if (!stream)
         goto cleanup;
@@ -1600,6 +1619,7 @@ static int write_window_thumbnail(Display *display, Window window,
     stream = NULL;
     if (rename(temporary, path) != 0)
         goto cleanup;
+    temporary_owned = 0;
     ok = 1;
 
 cleanup:
@@ -1607,7 +1627,7 @@ cleanup:
         fclose(stream);
     if (descriptor >= 0)
         close(descriptor);
-    if (!ok)
+    if (temporary_owned)
         unlink(temporary);
     free(row);
     XDestroyImage(image);
