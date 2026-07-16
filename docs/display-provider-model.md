@@ -32,9 +32,12 @@ policy. A provider that advertises writable physical rotation must also change
 the root geometry and publish the matching normalized input matrix. The CH347
 reference path does this by capturing a 480x320 logical root, rotating RGB565
 into the fixed 320x480 ST7796 panel, and applying the inverse transform to touch
-coordinates. HAL commits the provider-owned setting and asks Core to restart
-that display generation; consumers are suspended and restored through the
-existing display migration transaction.
+coordinates. HAL commits the provider-owned setting and signals the active
+provider generation. The provider changes the existing Xorg root with RandR,
+reloads capture and touch mapping in place, then atomically replaces the
+same-generation display-session document. Xorg, Shell and application clients
+keep their existing `:24` connections; only a real display-provider switch uses
+the broader display migration transaction.
 
 Every reference provider publishes the atomic
 [`msys.display-session.v1`](display-session-v1.md) document only after a real

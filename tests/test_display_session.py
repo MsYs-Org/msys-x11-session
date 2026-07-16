@@ -208,6 +208,42 @@ class DisplayStateFileTests(unittest.TestCase):
             self.assertEqual(load_state(path), changed)
             self.assertNotEqual(path.read_bytes(), original_bytes)
 
+    def test_same_generation_rotation_replaces_geometry_and_input_matrix(self) -> None:
+        document = {
+            "schema": SCHEMA,
+            "state": "ready",
+            "provider": "org.msys.openstick.ch347:x11-spi-touch-output",
+            "generation": 7,
+            "display": ":24",
+            "geometry": {"width": 320, "height": 480, "depth": 24},
+            "input_transform": {
+                "enabled": True,
+                "mode": "ch347-direct",
+                "device": "CH347 XPT2046",
+                "space": "normalized-display",
+                "matrix": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                "source": "ch347-direct-effective",
+                "verified": True,
+            },
+            "observed_at_unix_ms": 100,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "display-session.json"
+            write_state(path, document)
+            original_inode = path.stat().st_ino
+            rotated = dict(document)
+            rotated["geometry"] = {"width": 480, "height": 320, "depth": 24}
+            rotated["input_transform"] = {
+                **document["input_transform"],
+                "matrix": [0, 1, 0, -1, 0, 1, 0, 0, 1],
+            }
+            rotated["observed_at_unix_ms"] = 200
+
+            write_state(path, rotated)
+
+            self.assertEqual(load_state(path), rotated)
+            self.assertNotEqual(path.stat().st_ino, original_inode)
+
     def test_invalid_ready_document_is_rejected(self) -> None:
         with self.assertRaises(DisplaySessionError):
             validate_state({"schema": SCHEMA, "state": "starting"})
