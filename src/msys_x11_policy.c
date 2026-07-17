@@ -34,7 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
-#define MSYS_X11_POLICY_VERSION "0.2.20"
+#define MSYS_X11_POLICY_VERSION "0.2.21"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -49,6 +49,7 @@ static int wm_conflict;
 #define WINDOW_GEOMETRY_SCHEMA "msys.window-geometry.v1"
 #define DEBUG_GESTURE_MAX_MS 10000
 #define DEBUG_GESTURE_FRAME_MS 16
+#define DEBUG_DRAG_HOLD_MS 650
 #define THUMBNAIL_DIRECTORY "window-thumbnails"
 #define THUMBNAIL_MAX_WIDTH 288
 #define THUMBNAIL_MAX_HEIGHT 360
@@ -2977,6 +2978,15 @@ static enum debug_gesture_selector debug_gesture_selector_for_option(
     return DEBUG_GESTURE_NONE;
 }
 
+static int debug_gesture_hold_ms_for_option(const char *option)
+{
+    if (option && (strcmp(option, "--debug-drag-identity") == 0 ||
+            strcmp(option, "--debug-drag-title") == 0 ||
+            strcmp(option, "--debug-drag-window") == 0))
+        return DEBUG_DRAG_HOLD_MS;
+    return 0;
+}
+
 static int valid_debug_gesture_target(const char *identity, const char *title)
 {
     if (!identity && !title)
@@ -3037,7 +3047,7 @@ static void debug_gesture_close(Display *display, struct debug_xtest_api *api)
 
 static int send_swipe(const char *display_name, const char *identity,
         const char *fallback_title, int start_x, int start_y, int end_x,
-        int end_y, int duration_ms)
+        int end_y, int duration_ms, int hold_ms)
 {
     Display *display;
     Window root;
@@ -3114,6 +3124,15 @@ static int send_swipe(const char *display_name, const char *identity,
     }
     pressed = 1;
     XFlush(display);
+    if (hold_ms > 0) {
+        struct timespec hold;
+
+        hold.tv_sec = hold_ms / 1000;
+        hold.tv_nsec = (long)(hold_ms % 1000) * 1000 * 1000;
+        while (nanosleep(&hold, &hold) < 0 && errno == EINTR) {
+            /* Preserve the full long-press dwell across signal interruption. */
+        }
+    }
     steps = gesture_step_count(duration_ms);
     interval_ns = (long long)duration_ms * 1000 * 1000 / steps;
     for (step = 1; step <= steps; step++) {
@@ -3734,7 +3753,7 @@ static void print_usage(const char *program)
             "--debug-swipe-identity ID X1 Y1 X2 Y2 MS | "
             "--debug-swipe-title TITLE X1 Y1 X2 Y2 MS | "
             "--debug-swipe-window ID TITLE X1 Y1 X2 Y2 MS | "
-            "(--debug-drag-* aliases are accepted) | "
+            "(--debug-drag-* holds 650ms before motion) | "
             "--debug-root-size WIDTH HEIGHT | "
             "--set-layout PROFILE ORIENTATION INSETS | --print-layout | "
             "--sync-display-session WIDTH HEIGHT DEPTH ENABLED MATRIX | "
@@ -3771,6 +3790,7 @@ int main(int argc, char **argv)
     int action_width;
     int action_height;
     enum debug_gesture_selector gesture_selector;
+    int gesture_hold_ms;
     int allow_debug_layout;
     struct msys_x11_agent *agent = NULL;
     int agent_result = 0;
@@ -3872,6 +3892,9 @@ int main(int argc, char **argv)
     gesture_selector = argc > 1
         ? debug_gesture_selector_for_option(argv[1])
         : DEBUG_GESTURE_NONE;
+    gesture_hold_ms = argc > 1
+        ? debug_gesture_hold_ms_for_option(argv[1])
+        : 0;
     if (gesture_selector != DEBUG_GESTURE_NONE) {
         const char *identity = NULL;
         const char *title = NULL;
@@ -3911,7 +3934,7 @@ int main(int argc, char **argv)
         }
         return send_swipe(display_name, identity, title, gesture_start_x,
                 gesture_start_y, gesture_end_x, gesture_end_y,
-                gesture_duration);
+                gesture_duration, gesture_hold_ms);
     }
     if (argc == 4 && strcmp(argv[1], "--debug-root-size") == 0) {
         if (!parse_coordinate(argv[2], &debug_width) || debug_width < 1 ||

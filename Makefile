@@ -20,7 +20,7 @@ AGENT_TEST_TARGET := $(BIN_DIR)/test-native-agent
 THUMBNAIL_FIXTURE_TARGET := $(BIN_DIR)/thumbnail-late-render-fixture
 SYSTEM_UI_FIXTURE_TARGET := $(BIN_DIR)/override-redirect-system-ui-fixture
 PACKAGE_ID := org.msys.x11.session
-PACKAGE_VERSION := 0.2.20
+PACKAGE_VERSION := 0.2.21
 PACKAGE_ARCHIVE := dist/$(PACKAGE_ID)-$(PACKAGE_VERSION).tar.gz
 
 .PHONY: all native-test python-test test strict integration-test publisher-test \

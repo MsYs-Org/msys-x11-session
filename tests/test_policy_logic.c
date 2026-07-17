@@ -428,6 +428,16 @@ static void test_debug_gesture_contract_is_strict_and_interpolated(void)
             DEBUG_GESTURE_WINDOW);
     assert(debug_gesture_selector_for_option("--debug-swipe") ==
             DEBUG_GESTURE_NONE);
+    assert(debug_gesture_hold_ms_for_option("--debug-swipe-identity") == 0);
+    assert(debug_gesture_hold_ms_for_option("--debug-swipe-title") == 0);
+    assert(debug_gesture_hold_ms_for_option("--debug-swipe-window") == 0);
+    assert(debug_gesture_hold_ms_for_option("--debug-drag-identity") ==
+            DEBUG_DRAG_HOLD_MS);
+    assert(debug_gesture_hold_ms_for_option("--debug-drag-title") ==
+            DEBUG_DRAG_HOLD_MS);
+    assert(debug_gesture_hold_ms_for_option("--debug-drag-window") ==
+            DEBUG_DRAG_HOLD_MS);
+    assert(debug_gesture_hold_ms_for_option(NULL) == 0);
     assert(valid_debug_gesture_target("org.example.app", NULL));
     assert(valid_debug_gesture_target(NULL, "Example"));
     assert(valid_debug_gesture_target("org.example.app", "Example"));

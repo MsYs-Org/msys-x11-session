@@ -49,7 +49,9 @@ Their manifest roles claim the exact stable descriptors
 `org.msys.role.display-output.v1@1.0.0`; compatibility manifests carry the
 same claims.
 The native development helper also provides identity/title-addressed XTest
-swipe/drag injection, with no xdotool runtime dependency.
+swipe/drag injection, with no xdotool runtime dependency. Drag holds Button1
+for 650 ms before its first motion so LVGL long-press editing and folder moves
+can be exercised; swipe begins moving immediately.
 
 The native provider implements `get_display_session`, `get_layout`,
 `set_layout`, `list_windows`, `recents`, `activate_component`, Home, Back,
@@ -100,7 +102,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.20.tar.gz
+make package             # dist/org.msys.x11.session-0.2.21.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 
