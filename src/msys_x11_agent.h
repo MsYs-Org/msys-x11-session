@@ -21,6 +21,13 @@ int msys_x11_agent_start(struct msys_x11_agent **agent,
  * process exit status on a fatal transport error.
  */
 int msys_x11_agent_poll(struct msys_x11_agent *agent);
+
+/*
+ * Wake the exact-component transition watcher after an X11 top-level surface
+ * maps, unmaps, is destroyed, or publishes identity metadata.  This is only a
+ * lifecycle hint: it never paints, captures, or damages the display.
+ */
+void msys_x11_agent_notify_window_change(struct msys_x11_agent *agent);
 void msys_x11_agent_stop(struct msys_x11_agent *agent);
 
 #endif

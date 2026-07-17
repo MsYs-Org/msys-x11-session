@@ -66,6 +66,71 @@ first X11 map; that entry deliberately has no invented window id. Core
 lifecycle records and X11 surfaces are joined only by exact component or
 identity, never by title.
 
+## Application transition lifecycle
+
+The native provider exposes a lightweight observation contract for phone-style
+launch and close animations. It does not render an overlay and does not start,
+stop, restart, capture, or composite an application. The Shell paints its own
+icon/color layer immediately, while the window policy reports when the exact
+component surface actually becomes viewable or disappears.
+
+Callers should generate the transition id before painting so an event can be
+matched even if it arrives before the RPC return:
+
+```text
+begin_launch_transition({
+  transition_id: "shell-42",
+  component: "org.example.viewer:main",
+  identity: "org.example.viewer",       # optional presentation metadata
+  icon: "/package/icons/viewer.png",    # optional, not opened by policy
+  color: "#f4f7ff",                    # optional #RRGGBB or #AARRGGBB
+  origin: {x: 24, y: 72, width: 64, height: 64}, # optional
+  timeout_ms: 8000                      # optional, 100..30000
+}) -> {
+  ok: true,
+  schema: "msys.window-transition.v1",
+  transition_id: "shell-42",
+  action: "launch",
+  component: "org.example.viewer:main",
+  state: "waiting-surface",
+  timeout_ms: 8000
+}
+
+begin_close_transition({...same fields...})
+begin_transition({...same fields..., action: "launch" | "close"})
+cancel_transition({transition_id: "shell-42", reason: "core-start-failed"})
+```
+
+Accepted transactions publish `msys.window.transition` with schema
+`msys.window-transition.v1`. The stable phases are:
+
+```text
+requested
+surface-ready  # launch: exact component has an IsViewable application window
+surface-gone   # close: a previously observed exact surface is no longer viewable
+failed         # reason is surface-timeout or the caller's cancellation reason
+```
+
+`surface-ready` includes the generation-checked `window_id` and observed
+`window_identity`. Every event repeats `transition_id`, `action`, `component`,
+`identity`, `timeout_ms`, and the bounded `visual` hints. A close transaction
+must begin while the target surface still exists; it cannot mistake an already
+missing window for a successful exit.
+
+The intended launch sequence is: paint the Shell overlay, begin observation,
+call Core `start`, then fade/scale the overlay only after `surface-ready`. If
+Core rejects the start, call `cancel_transition` and remove the overlay while
+showing the returned reason. Closing follows the same sequence with
+`begin_close_transition`, an explicit close action, and `surface-gone`.
+Timeout and cancellation only end the visual transaction; they never kill or
+restart a component.
+
+Observation is event driven. The provider performs one initial lookup and then
+rescans only after X11 map, unmap, destroy, or identity-property changes. It
+does not add a timer-driven screenshot/render loop and does not touch display
+dirty tracking. At most eight transitions may be active, and one component may
+have only one active transition.
+
 ## Typed window actions
 
 All actions return `schema: "msys.window-action.v1"`, `ok`, `action`, and the

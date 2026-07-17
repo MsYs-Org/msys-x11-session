@@ -71,6 +71,12 @@ This closes the cold-start gap where a toolkit maps before painting its first
 useful frame, without polling screenshots or issuing X rendering/damage of its
 own. Paint bursts are coalesced, and an obscured task keeps its last clean
 preview until it is exposed again.
+Phone-style launch/close animation timing uses the event-driven
+`msys.window-transition.v1` contract. The native provider watches an exact
+component from `requested` to `surface-ready`/`surface-gone` (or a typed
+failure); the replaceable Shell owns the icon/color overlay and its LVGL
+animation. No transition window, compositor, screenshot timer, or display
+dirty override is added by this package.
 The optional `xinput` property-probe mode intentionally falls back to the
 Python publisher rather than adding a subprocess parser to the resident C
 agent.
@@ -94,7 +100,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.18.tar.gz
+make package             # dist/org.msys.x11.session-0.2.19.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 

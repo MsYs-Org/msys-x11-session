@@ -29,6 +29,36 @@
 #define AGENT_COMPONENT_FALLBACK "org.msys.x11.session:window-policy"
 #define AGENT_WORKER_STACK (256u * 1024u)
 #define AGENT_SHUTDOWN 100
+#define AGENT_TRANSITION_LIMIT 8
+#define AGENT_TRANSITION_ID_MAX 96
+#define AGENT_TRANSITION_ICON_MAX 512
+#define AGENT_TRANSITION_REASON_MAX 64
+#define AGENT_TRANSITION_DEFAULT_TIMEOUT_MS 8000
+#define AGENT_TRANSITION_MIN_TIMEOUT_MS 100
+#define AGENT_TRANSITION_MAX_TIMEOUT_MS 30000
+
+enum transition_action {
+    TRANSITION_LAUNCH = 1,
+    TRANSITION_CLOSE = 2
+};
+
+struct window_transition {
+    int active;
+    enum transition_action action;
+    int observed_surface;
+    int has_origin;
+    int origin_x;
+    int origin_y;
+    int origin_width;
+    int origin_height;
+    int timeout_ms;
+    uint64_t deadline_ms;
+    char id[AGENT_TRANSITION_ID_MAX + 1];
+    char component[257];
+    char identity[257];
+    char icon[AGENT_TRANSITION_ICON_MAX + 1];
+    char color[10];
+};
 
 struct display_session {
     char *json;
@@ -47,6 +77,7 @@ struct msys_x11_agent {
     pthread_mutex_t send_lock;
     pthread_mutex_t worker_lock;
     pthread_mutex_t session_lock;
+    pthread_mutex_t transition_lock;
     pthread_cond_t worker_idle;
     unsigned int workers;
     int stopping;
@@ -57,6 +88,9 @@ struct msys_x11_agent {
     int have_state_stat;
     struct display_session session;
     uint64_t next_state_poll_ms;
+    unsigned long transition_sequence;
+    int transition_scan;
+    struct window_transition transitions[AGENT_TRANSITION_LIMIT];
     char *recv_packet;
 };
 
@@ -146,6 +180,24 @@ static char *copy_raw(const char *json, const char *key)
     return result;
 }
 
+static int json_get_optional_string(const char *json, const char *key,
+        char *value, size_t size)
+{
+    char *raw;
+
+    if (msys_mipc_json_get_string(json, key, value, size, NULL) ==
+            MSYS_MIPC_OK)
+        return 1;
+    raw = copy_raw(json, key);
+    if (raw) {
+        free(raw);
+        return 0;
+    }
+    if (size)
+        value[0] = '\0';
+    return 1;
+}
+
 static int json_get_int(const char *json, const char *key, int minimum,
         int maximum, int *value)
 {
@@ -227,6 +279,44 @@ static int valid_component_name(const char *value)
     return 1;
 }
 
+static int valid_transition_token(const char *value)
+{
+    const unsigned char *cursor = (const unsigned char *)value;
+
+    if (!cursor || !*cursor)
+        return 0;
+    while (*cursor) {
+        if (!((*cursor >= 'a' && *cursor <= 'z') ||
+                (*cursor >= 'A' && *cursor <= 'Z') ||
+                (*cursor >= '0' && *cursor <= '9') || *cursor == '.' ||
+                *cursor == ':' || *cursor == '_' || *cursor == '-'))
+            return 0;
+        cursor++;
+    }
+    return 1;
+}
+
+static int valid_transition_color(const char *value)
+{
+    size_t length;
+    size_t i;
+
+    if (!value || !*value)
+        return 1;
+    length = strlen(value);
+    if ((length != 7u && length != 9u) || value[0] != '#')
+        return 0;
+    for (i = 1; i < length; i++) {
+        unsigned char byte = (unsigned char)value[i];
+
+        if (!((byte >= '0' && byte <= '9') ||
+                (byte >= 'a' && byte <= 'f') ||
+                (byte >= 'A' && byte <= 'F')))
+            return 0;
+    }
+    return 1;
+}
+
 static int send_return_locked(struct msys_x11_agent *agent, uint64_t id,
         const char *payload)
 {
@@ -249,6 +339,83 @@ static int send_event_locked(struct msys_x11_agent *agent, const char *topic,
             payload ? payload : "{}");
     pthread_mutex_unlock(&agent->send_lock);
     return result;
+}
+
+static const char *transition_action_name(enum transition_action action)
+{
+    return action == TRANSITION_CLOSE ? "close" : "launch";
+}
+
+static char *transition_event_json(const struct window_transition *transition,
+        const char *phase, const char *reason,
+        const struct msys_x11_window_summary *window)
+{
+    char *id = json_quote(transition->id);
+    char *component = json_quote(transition->component);
+    char *identity = json_quote(transition->identity);
+    char *icon = json_quote(transition->icon);
+    char *color = json_quote(transition->color);
+    char *quoted_phase = json_quote(phase);
+    char *quoted_reason = reason ? json_quote(reason) : NULL;
+    char *window_id = window ? json_quote(window->window_id) : NULL;
+    char *window_identity = window ? json_quote(window->identity) : NULL;
+    char *origin = NULL;
+    char *visual = NULL;
+    char *window_fields = NULL;
+    char *reason_field = NULL;
+    char *result = NULL;
+
+    if (id && component && identity && icon && color && quoted_phase &&
+            (!reason || quoted_reason) && (!window ||
+                (window_id && window_identity))) {
+        origin = transition->has_origin ? format_json(
+                ",\"origin\":{\"x\":%d,\"y\":%d,\"width\":%d,"
+                "\"height\":%d}", transition->origin_x,
+                transition->origin_y, transition->origin_width,
+                transition->origin_height) : strdup("");
+        visual = origin ? format_json("{\"icon\":%s,\"color\":%s%s}",
+                icon, color, origin) : NULL;
+        window_fields = window ? format_json(
+                ",\"window_id\":%s,\"window_identity\":%s",
+                window_id, window_identity) : strdup("");
+        reason_field = reason ? format_json(",\"reason\":%s",
+                quoted_reason) : strdup("");
+        if (visual && window_fields && reason_field)
+            result = format_json(
+                    "{\"schema\":\"msys.window-transition.v1\","
+                    "\"transition_id\":%s,\"action\":\"%s\","
+                    "\"phase\":%s,\"component\":%s,\"identity\":%s,"
+                    "\"timeout_ms\":%d,\"visual\":%s%s%s}", id,
+                    transition_action_name(transition->action), quoted_phase,
+                    component, identity, transition->timeout_ms, visual,
+                    window_fields, reason_field);
+    }
+    free(id);
+    free(component);
+    free(identity);
+    free(icon);
+    free(color);
+    free(quoted_phase);
+    free(quoted_reason);
+    free(window_id);
+    free(window_identity);
+    free(origin);
+    free(visual);
+    free(window_fields);
+    free(reason_field);
+    return result;
+}
+
+static void publish_transition_event(struct msys_x11_agent *agent,
+        const struct window_transition *transition, const char *phase,
+        const char *reason, const struct msys_x11_window_summary *window)
+{
+    char *event = transition_event_json(transition, phase, reason, window);
+
+    if (event) {
+        (void)send_event_locked(agent, "msys.window.transition", event);
+        free(event);
+    }
 }
 
 static int set_socket_timeout(int fd, int timeout_ms)
@@ -691,6 +858,183 @@ static char *activate_component(struct msys_x11_agent *agent,
     free(quoted_identity);
     free(quoted_title);
     free(quoted_component);
+    return result;
+}
+
+static char *begin_window_transition(struct msys_x11_agent *agent,
+        const char *payload, enum transition_action forced_action)
+{
+    struct window_transition transition;
+    struct window_transition *slot = NULL;
+    char action[16] = "";
+    char requested_id[AGENT_TRANSITION_ID_MAX + 1] = "";
+    char *origin = NULL;
+    char *quoted_id;
+    char *quoted_component;
+    char *result;
+    uint64_t now = 0;
+    int timeout_ms = AGENT_TRANSITION_DEFAULT_TIMEOUT_MS;
+    int i;
+
+    memset(&transition, 0, sizeof(transition));
+    if (msys_mipc_json_get_string(payload, "component",
+                transition.component, sizeof(transition.component), NULL) !=
+                MSYS_MIPC_OK || !valid_component_name(transition.component))
+        return strdup("{\"ok\":false,\"reason\":\"invalid-component\"}");
+    transition.action = forced_action;
+    if (!transition.action) {
+        if (msys_mipc_json_get_string(payload, "action", action,
+                    sizeof(action), NULL) != MSYS_MIPC_OK)
+            return strdup("{\"ok\":false,\"reason\":\"invalid-transition-action\"}");
+        if (strcmp(action, "launch") == 0)
+            transition.action = TRANSITION_LAUNCH;
+        else if (strcmp(action, "close") == 0)
+            transition.action = TRANSITION_CLOSE;
+        else
+            return strdup("{\"ok\":false,\"reason\":\"invalid-transition-action\"}");
+    }
+    if (!json_get_optional_string(payload, "identity", transition.identity,
+                sizeof(transition.identity)) ||
+            !json_get_optional_string(payload, "icon", transition.icon,
+                sizeof(transition.icon)) ||
+            !json_get_optional_string(payload, "color", transition.color,
+                sizeof(transition.color)))
+        return strdup("{\"ok\":false,\"reason\":\"invalid-transition-visual\"}");
+    if (!valid_transition_color(transition.color))
+        return strdup("{\"ok\":false,\"reason\":\"invalid-transition-color\"}");
+    if (!json_get_optional_string(payload, "transition_id", requested_id,
+                sizeof(requested_id)) || (*requested_id &&
+                !valid_transition_token(requested_id)))
+        return strdup("{\"ok\":false,\"reason\":\"invalid-transition-id\"}");
+    {
+        char *raw_timeout = copy_raw(payload, "timeout_ms");
+
+        if (raw_timeout && !json_get_int(payload, "timeout_ms",
+                    AGENT_TRANSITION_MIN_TIMEOUT_MS,
+                    AGENT_TRANSITION_MAX_TIMEOUT_MS, &timeout_ms)) {
+            free(raw_timeout);
+            return strdup("{\"ok\":false,\"reason\":\"invalid-transition-timeout\"}");
+        }
+        free(raw_timeout);
+    }
+    origin = copy_raw(payload, "origin");
+    if (origin) {
+        if (!json_get_int(origin, "x", -32768, 32767,
+                    &transition.origin_x) ||
+                !json_get_int(origin, "y", -32768, 32767,
+                    &transition.origin_y) ||
+                !json_get_int(origin, "width", 1, 32767,
+                    &transition.origin_width) ||
+                !json_get_int(origin, "height", 1, 32767,
+                    &transition.origin_height)) {
+            free(origin);
+            return strdup("{\"ok\":false,\"reason\":\"invalid-transition-origin\"}");
+        }
+        transition.has_origin = 1;
+    }
+    free(origin);
+    if (msys_mipc_monotonic_ms(&now) != MSYS_MIPC_OK)
+        return strdup("{\"ok\":false,\"reason\":\"clock-unavailable\"}");
+    transition.deadline_ms = now + (uint64_t)timeout_ms;
+    transition.timeout_ms = timeout_ms;
+    transition.active = 1;
+
+    pthread_mutex_lock(&agent->transition_lock);
+    for (i = 0; i < AGENT_TRANSITION_LIMIT; i++) {
+        if (agent->transitions[i].active &&
+                strcmp(agent->transitions[i].component,
+                    transition.component) == 0) {
+            pthread_mutex_unlock(&agent->transition_lock);
+            return strdup("{\"ok\":false,\"reason\":\"component-transition-active\"}");
+        }
+        if (!agent->transitions[i].active && !slot)
+            slot = &agent->transitions[i];
+    }
+    if (!slot) {
+        pthread_mutex_unlock(&agent->transition_lock);
+        return strdup("{\"ok\":false,\"reason\":\"transition-capacity-reached\"}");
+    }
+    if (*requested_id) {
+        for (i = 0; i < AGENT_TRANSITION_LIMIT; i++) {
+            if (agent->transitions[i].active &&
+                    strcmp(agent->transitions[i].id, requested_id) == 0) {
+                pthread_mutex_unlock(&agent->transition_lock);
+                return strdup("{\"ok\":false,\"reason\":\"transition-id-active\"}");
+            }
+        }
+        snprintf(transition.id, sizeof(transition.id), "%s", requested_id);
+    } else {
+        agent->transition_sequence++;
+        snprintf(transition.id, sizeof(transition.id), "x11-%ld-%lu",
+                (long)getpid(), agent->transition_sequence);
+    }
+    *slot = transition;
+    agent->transition_scan = 1;
+    /* Preserve ordering even when the main event loop scans concurrently. */
+    publish_transition_event(agent, &transition, "requested", NULL, NULL);
+    pthread_mutex_unlock(&agent->transition_lock);
+
+    quoted_id = json_quote(transition.id);
+    quoted_component = json_quote(transition.component);
+    result = quoted_id && quoted_component ? format_json(
+            "{\"ok\":true,\"schema\":\"msys.window-transition.v1\","
+            "\"transition_id\":%s,\"action\":\"%s\","
+            "\"component\":%s,\"state\":\"waiting-surface\","
+            "\"timeout_ms\":%d}", quoted_id,
+            transition_action_name(transition.action), quoted_component,
+            timeout_ms) : NULL;
+    free(quoted_id);
+    free(quoted_component);
+    return result;
+}
+
+static char *cancel_window_transition(struct msys_x11_agent *agent,
+        const char *payload)
+{
+    struct window_transition transition;
+    char transition_id[AGENT_TRANSITION_ID_MAX + 1] = "";
+    char reason[AGENT_TRANSITION_REASON_MAX + 1] = "caller-cancelled";
+    char optional_reason[AGENT_TRANSITION_REASON_MAX + 1];
+    char *quoted_id;
+    char *quoted_reason;
+    char *result;
+    int found = 0;
+    int i;
+
+    if (msys_mipc_json_get_string(payload, "transition_id", transition_id,
+                sizeof(transition_id), NULL) != MSYS_MIPC_OK ||
+            !valid_transition_token(transition_id))
+        return strdup("{\"ok\":false,\"reason\":\"invalid-transition-id\"}");
+    if (msys_mipc_json_get_string(payload, "reason", optional_reason,
+                sizeof(optional_reason), NULL) == MSYS_MIPC_OK) {
+        if (!valid_transition_token(optional_reason))
+            return strdup("{\"ok\":false,\"reason\":\"invalid-transition-reason\"}");
+        snprintf(reason, sizeof(reason), "%s", optional_reason);
+    }
+    memset(&transition, 0, sizeof(transition));
+    pthread_mutex_lock(&agent->transition_lock);
+    for (i = 0; i < AGENT_TRANSITION_LIMIT; i++) {
+        if (agent->transitions[i].active &&
+                strcmp(agent->transitions[i].id, transition_id) == 0) {
+            transition = agent->transitions[i];
+            memset(&agent->transitions[i], 0,
+                    sizeof(agent->transitions[i]));
+            found = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&agent->transition_lock);
+    if (!found)
+        return strdup("{\"ok\":false,\"reason\":\"transition-not-active\"}");
+    publish_transition_event(agent, &transition, "failed", reason, NULL);
+    quoted_id = json_quote(transition.id);
+    quoted_reason = json_quote(reason);
+    result = quoted_id && quoted_reason ? format_json(
+            "{\"ok\":true,\"schema\":\"msys.window-transition.v1\","
+            "\"transition_id\":%s,\"state\":\"cancelled\","
+            "\"reason\":%s}", quoted_id, quoted_reason) : NULL;
+    free(quoted_id);
+    free(quoted_reason);
     return result;
 }
 
@@ -1199,6 +1543,14 @@ static char *handle_call(struct msys_x11_agent *agent, const char *method,
     }
     if (strcmp(method, "activate_component") == 0)
         return activate_component(agent, payload);
+    if (strcmp(method, "begin_transition") == 0)
+        return begin_window_transition(agent, payload, 0);
+    if (strcmp(method, "begin_launch_transition") == 0)
+        return begin_window_transition(agent, payload, TRANSITION_LAUNCH);
+    if (strcmp(method, "begin_close_transition") == 0)
+        return begin_window_transition(agent, payload, TRANSITION_CLOSE);
+    if (strcmp(method, "cancel_transition") == 0)
+        return cancel_window_transition(agent, payload);
     if (strcmp(method, "home") == 0)
         return home_action(agent);
     if (strcmp(method, "back") == 0)
@@ -1619,6 +1971,7 @@ int msys_x11_agent_start(struct msys_x11_agent **output,
     pthread_mutex_init(&agent->send_lock, NULL);
     pthread_mutex_init(&agent->worker_lock, NULL);
     pthread_mutex_init(&agent->session_lock, NULL);
+    pthread_mutex_init(&agent->transition_lock, NULL);
     pthread_cond_init(&agent->worker_idle, NULL);
     snprintf(agent->display, sizeof(agent->display), "%s",
             display_name ? display_name : "");
@@ -1690,6 +2043,7 @@ moved:
     free(agent->recv_packet);
     pthread_cond_destroy(&agent->worker_idle);
     pthread_mutex_destroy(&agent->session_lock);
+    pthread_mutex_destroy(&agent->transition_lock);
     pthread_mutex_destroy(&agent->worker_lock);
     pthread_mutex_destroy(&agent->send_lock);
     free(agent);
@@ -1701,10 +2055,86 @@ failed:
     free(agent->recv_packet);
     pthread_cond_destroy(&agent->worker_idle);
     pthread_mutex_destroy(&agent->session_lock);
+    pthread_mutex_destroy(&agent->transition_lock);
     pthread_mutex_destroy(&agent->worker_lock);
     pthread_mutex_destroy(&agent->send_lock);
     free(agent);
     return 1;
+}
+
+struct transition_outcome {
+    struct window_transition transition;
+    struct msys_x11_window_summary window;
+    const char *phase;
+    const char *reason;
+};
+
+static void poll_window_transitions(struct msys_x11_agent *agent,
+        uint64_t now)
+{
+    struct transition_outcome outcomes[AGENT_TRANSITION_LIMIT];
+    size_t outcome_count = 0;
+    int scan;
+    int i;
+
+    memset(outcomes, 0, sizeof(outcomes));
+    pthread_mutex_lock(&agent->transition_lock);
+    scan = agent->transition_scan;
+    agent->transition_scan = 0;
+    for (i = 0; i < AGENT_TRANSITION_LIMIT; i++) {
+        struct window_transition *transition = &agent->transitions[i];
+        struct msys_x11_window_summary window;
+        int present = 0;
+
+        if (!transition->active)
+            continue;
+        memset(&window, 0, sizeof(window));
+        if (scan)
+            present = msys_x11_policy_component_window(agent->display,
+                    transition->component, &window) == 1;
+        if (scan && transition->action == TRANSITION_CLOSE && present) {
+            transition->observed_surface = 1;
+            continue;
+        }
+        if (scan && ((transition->action == TRANSITION_LAUNCH && present) ||
+                (transition->action == TRANSITION_CLOSE && !present &&
+                    transition->observed_surface))) {
+            struct transition_outcome *outcome = &outcomes[outcome_count++];
+
+            outcome->transition = *transition;
+            outcome->window = window;
+            outcome->phase = transition->action == TRANSITION_LAUNCH
+                ? "surface-ready" : "surface-gone";
+            memset(transition, 0, sizeof(*transition));
+            continue;
+        }
+        if (now >= transition->deadline_ms) {
+            struct transition_outcome *outcome = &outcomes[outcome_count++];
+
+            outcome->transition = *transition;
+            outcome->phase = "failed";
+            outcome->reason = "surface-timeout";
+            memset(transition, 0, sizeof(*transition));
+        }
+    }
+    pthread_mutex_unlock(&agent->transition_lock);
+    for (i = 0; i < (int)outcome_count; i++) {
+        struct transition_outcome *outcome = &outcomes[i];
+
+        publish_transition_event(agent, &outcome->transition,
+                outcome->phase, outcome->reason,
+                strcmp(outcome->phase, "surface-ready") == 0
+                    ? &outcome->window : NULL);
+    }
+}
+
+void msys_x11_agent_notify_window_change(struct msys_x11_agent *agent)
+{
+    if (!agent)
+        return;
+    pthread_mutex_lock(&agent->transition_lock);
+    agent->transition_scan = 1;
+    pthread_mutex_unlock(&agent->transition_lock);
 }
 
 int msys_x11_agent_poll(struct msys_x11_agent *agent)
@@ -1745,6 +2175,8 @@ int msys_x11_agent_poll(struct msys_x11_agent *agent)
         if (result != 0)
             return result;
     }
+    if (now)
+        poll_window_transitions(agent, now);
     return 0;
 }
 
@@ -1762,6 +2194,7 @@ void msys_x11_agent_stop(struct msys_x11_agent *agent)
     free(agent->recv_packet);
     pthread_cond_destroy(&agent->worker_idle);
     pthread_mutex_destroy(&agent->session_lock);
+    pthread_mutex_destroy(&agent->transition_lock);
     pthread_mutex_destroy(&agent->worker_lock);
     pthread_mutex_destroy(&agent->send_lock);
     free(agent);

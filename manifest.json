@@ -3,7 +3,7 @@
   "package": {
     "id": "org.msys.x11.session",
     "name": "MSYS X11 Session",
-    "version": "0.2.18",
+    "version": "0.2.19",
     "kind": "system",
     "vendor": "MSYS",
     "summary": "Native X11 window policy and replaceable display-session providers"
@@ -43,6 +43,7 @@
         "mipc.event:publish:msys.display_session.applied",
         "mipc.event:publish:msys.layout.changed",
         "mipc.event:publish:msys.window.action",
+        "mipc.event:publish:msys.window.transition",
         "x11:manage-windows"
       ]
     },
@@ -84,6 +85,7 @@
         "mipc.event:publish:msys.display_session.applied",
         "mipc.event:publish:msys.layout.changed",
         "mipc.event:publish:msys.window.action",
+        "mipc.event:publish:msys.window.transition",
         "x11:manage-windows"
       ]
     },

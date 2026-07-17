@@ -34,7 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
-#define MSYS_X11_POLICY_VERSION "0.2.18"
+#define MSYS_X11_POLICY_VERSION "0.2.19"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -4071,6 +4071,7 @@ int main(int argc, char **argv)
             watch_window_metadata(display, event.xmap.window);
             layout_window(display, event.xmap.window, &layout_state, NULL);
             raise_system_overlays(display, root);
+            msys_x11_agent_notify_window_change(agent);
             break;
         case PropertyNotify:
             if (event.xproperty.window == root &&
@@ -4104,6 +4105,7 @@ int main(int argc, char **argv)
                 layout_window(display, event.xproperty.window, &layout_state,
                         NULL);
                 raise_system_overlays(display, root);
+                msys_x11_agent_notify_window_change(agent);
             } else if (event.xproperty.window != root &&
                     property_affects_window_metadata(
                         event.xproperty.atom,
@@ -4136,6 +4138,10 @@ int main(int argc, char **argv)
         case DestroyNotify:
             thumbnail_damage_forget_window(event.xdestroywindow.window);
             remove_window_thumbnail(event.xdestroywindow.window);
+            msys_x11_agent_notify_window_change(agent);
+            break;
+        case UnmapNotify:
+            msys_x11_agent_notify_window_change(agent);
             break;
         default:
             if (thumbnail_damage_event_matches(&event))

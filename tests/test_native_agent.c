@@ -19,6 +19,8 @@
     } \
 } while (0)
 
+void test_policy_stub_set_running_present(int present);
+
 static int receive(msys_mipc_client *peer, char *packet, const char *type,
         int timeout_ms)
 {
@@ -56,6 +58,144 @@ static int call_and_expect(struct msys_x11_agent *agent,
         }
     }
     return 0;
+}
+
+static int launch_transition_and_expect(struct msys_x11_agent *agent,
+        msys_mipc_client *peer, char *packet)
+{
+    const char *request =
+        "{\"type\":\"call\",\"id\":8,"
+        "\"method\":\"begin_launch_transition\","
+        "\"payload\":{\"transition_id\":\"shell-42\","
+        "\"component\":\"org.example.running:main\","
+        "\"identity\":\"org.example.running\","
+        "\"icon\":\"/icons/running.png\",\"color\":\"#f4f7ff\","
+        "\"origin\":{\"x\":20,\"y\":80,\"width\":64,"
+        "\"height\":64},\"timeout_ms\":1000}}";
+    int saw_requested = 0;
+    int saw_ready = 0;
+    int saw_return = 0;
+    int attempt;
+
+    if (msys_mipc_send_json(peer, request) != MSYS_MIPC_OK)
+        return 0;
+    for (attempt = 0; attempt < 200 &&
+            !(saw_requested && saw_ready && saw_return); attempt++) {
+        char type[32] = "";
+
+        if (msys_x11_agent_poll(agent) != 0)
+            return 0;
+        if (msys_mipc_recv_json(peer, packet, MSYS_MIPC_RECV_CAPACITY,
+                    20, NULL) != MSYS_MIPC_OK)
+            continue;
+        if (msys_mipc_json_get_string(packet, "type", type, sizeof(type),
+                    NULL) != MSYS_MIPC_OK)
+            continue;
+        if (strcmp(type, "event") == 0 &&
+                strstr(packet, "msys.window.transition")) {
+            if (strstr(packet, "\"phase\":\"requested\"") &&
+                    strstr(packet, "\"origin\":") &&
+                    strstr(packet, "shell-42"))
+                saw_requested = 1;
+            if (strstr(packet, "\"phase\":\"surface-ready\"") &&
+                    strstr(packet, "msys.x11-window.v1:test:0x99"))
+                saw_ready = 1;
+        } else if (strcmp(type, "return") == 0 &&
+                strstr(packet, "shell-42") &&
+                strstr(packet, "waiting-surface")) {
+            saw_return = 1;
+        }
+    }
+    return saw_requested && saw_ready && saw_return;
+}
+
+static int transition_timeout_and_expect(struct msys_x11_agent *agent,
+        msys_mipc_client *peer, char *packet)
+{
+    const char *request =
+        "{\"type\":\"call\",\"id\":9,"
+        "\"method\":\"begin_launch_transition\","
+        "\"payload\":{\"transition_id\":\"shell-timeout\","
+        "\"component\":\"org.example.missing:main\","
+        "\"timeout_ms\":100}}";
+    int saw_requested = 0;
+    int saw_timeout = 0;
+    int saw_return = 0;
+    int attempt;
+
+    if (msys_mipc_send_json(peer, request) != MSYS_MIPC_OK)
+        return 0;
+    for (attempt = 0; attempt < 200 &&
+            !(saw_requested && saw_timeout && saw_return); attempt++) {
+        char type[32] = "";
+
+        if (msys_x11_agent_poll(agent) != 0)
+            return 0;
+        if (msys_mipc_recv_json(peer, packet, MSYS_MIPC_RECV_CAPACITY,
+                    20, NULL) != MSYS_MIPC_OK)
+            continue;
+        if (msys_mipc_json_get_string(packet, "type", type, sizeof(type),
+                    NULL) != MSYS_MIPC_OK)
+            continue;
+        if (strcmp(type, "event") == 0 && strstr(packet, "shell-timeout")) {
+            if (strstr(packet, "\"phase\":\"requested\""))
+                saw_requested = 1;
+            if (strstr(packet, "\"phase\":\"failed\"") &&
+                    strstr(packet, "\"reason\":\"surface-timeout\""))
+                saw_timeout = 1;
+        } else if (strcmp(type, "return") == 0 &&
+                strstr(packet, "shell-timeout")) {
+            saw_return = 1;
+        }
+    }
+    return saw_requested && saw_timeout && saw_return;
+}
+
+static int close_transition_and_expect(struct msys_x11_agent *agent,
+        msys_mipc_client *peer, char *packet)
+{
+    const char *request =
+        "{\"type\":\"call\",\"id\":10,"
+        "\"method\":\"begin_close_transition\","
+        "\"payload\":{\"transition_id\":\"shell-close\","
+        "\"component\":\"org.example.running:main\","
+        "\"timeout_ms\":1000}}";
+    int saw_requested = 0;
+    int saw_return = 0;
+    int saw_gone = 0;
+    int surface_removed = 0;
+    int attempt;
+
+    if (msys_mipc_send_json(peer, request) != MSYS_MIPC_OK)
+        return 0;
+    for (attempt = 0; attempt < 200 && !saw_gone; attempt++) {
+        char type[32] = "";
+
+        if (msys_x11_agent_poll(agent) != 0)
+            return 0;
+        if (!surface_removed && saw_requested && saw_return) {
+            test_policy_stub_set_running_present(0);
+            msys_x11_agent_notify_window_change(agent);
+            surface_removed = 1;
+        }
+        if (msys_mipc_recv_json(peer, packet, MSYS_MIPC_RECV_CAPACITY,
+                    20, NULL) != MSYS_MIPC_OK)
+            continue;
+        if (msys_mipc_json_get_string(packet, "type", type, sizeof(type),
+                    NULL) != MSYS_MIPC_OK)
+            continue;
+        if (strcmp(type, "event") == 0 && strstr(packet, "shell-close")) {
+            if (strstr(packet, "\"phase\":\"requested\""))
+                saw_requested = 1;
+            if (strstr(packet, "\"phase\":\"surface-gone\""))
+                saw_gone = 1;
+        } else if (strcmp(type, "return") == 0 &&
+                strstr(packet, "shell-close")) {
+            saw_return = 1;
+        }
+    }
+    test_policy_stub_set_running_present(1);
+    return saw_requested && saw_return && saw_gone;
 }
 
 int main(void)
@@ -126,6 +266,13 @@ int main(void)
                 "\"placement\":\"maximized\""));
     CHECK(receive(&peer, packet, "event", 1000));
     CHECK(strstr(packet, "msys.window.action") != NULL);
+    CHECK(launch_transition_and_expect(agent, &peer, packet));
+    CHECK(close_transition_and_expect(agent, &peer, packet));
+    CHECK(transition_timeout_and_expect(agent, &peer, packet));
+    CHECK(call_and_expect(agent, &peer, packet, 11,
+                "begin_launch_transition",
+                "{\"component\":\"bad component\"}",
+                "invalid-component"));
 
     CHECK(msys_mipc_send_json(&peer, "{\"type\":\"shutdown\"}") ==
             MSYS_MIPC_OK);

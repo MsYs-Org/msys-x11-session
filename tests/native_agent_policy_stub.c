@@ -6,6 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+static int running_component_present = 1;
+
+void test_policy_stub_set_running_present(int present)
+{
+    running_component_present = present;
+}
+
 char *msys_x11_policy_list_windows_json(const char *display_name)
 {
     (void)display_name;
@@ -35,8 +42,19 @@ int msys_x11_policy_component_window(const char *display_name,
         const char *component, struct msys_x11_window_summary *summary)
 {
     (void)display_name;
-    (void)component;
     memset(summary, 0, sizeof(*summary));
+    if (running_component_present &&
+            strcmp(component, "org.example.running:main") == 0) {
+        snprintf(summary->window_id, sizeof(summary->window_id),
+                "msys.x11-window.v1:test:0x99");
+        snprintf(summary->identity, sizeof(summary->identity),
+                "org.example.running");
+        snprintf(summary->component, sizeof(summary->component), "%s",
+                component);
+        snprintf(summary->role, sizeof(summary->role), "application");
+        snprintf(summary->kind, sizeof(summary->kind), "application");
+        return 1;
+    }
     return 0;
 }
 

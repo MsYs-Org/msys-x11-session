@@ -20,7 +20,7 @@ AGENT_TEST_TARGET := $(BIN_DIR)/test-native-agent
 THUMBNAIL_FIXTURE_TARGET := $(BIN_DIR)/thumbnail-late-render-fixture
 SYSTEM_UI_FIXTURE_TARGET := $(BIN_DIR)/override-redirect-system-ui-fixture
 PACKAGE_ID := org.msys.x11.session
-PACKAGE_VERSION := 0.2.18
+PACKAGE_VERSION := 0.2.19
 PACKAGE_ARCHIVE := dist/$(PACKAGE_ID)-$(PACKAGE_VERSION).tar.gz
 
 .PHONY: all native-test python-test test strict integration-test publisher-test \
@@ -85,7 +85,7 @@ $(SYSTEM_UI_FIXTURE_TARGET): tests/override_redirect_system_ui_fixture.c
 		$(LDFLAGS) -lX11 -o $@
 
 integration-test: $(TARGET) $(THUMBNAIL_FIXTURE_TARGET) $(SYSTEM_UI_FIXTURE_TARGET)
-	tests/test_x11_runtime.sh
+	sh tests/test_x11_runtime.sh
 
 publisher-test: $(TARGET)
 	sh scripts/test_native_publisher.sh
