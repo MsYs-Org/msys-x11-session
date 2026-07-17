@@ -327,6 +327,9 @@ static void test_layer_order(void)
     assert(window_kind_allows_override_redirect(WINDOW_TRANSITION));
     assert(surface_for_window_kind(WINDOW_INPUT_METHOD) ==
             MSYS_SURFACE_INPUT_METHOD);
+    assert(surface_for_window_kind(WINDOW_TRANSITION) ==
+            MSYS_SURFACE_TRANSITION);
+    assert(surface_for_window_kind(WINDOW_SHIELD) == MSYS_SURFACE_SHIELD);
     assert(layer_for_kind(WINDOW_APPLICATION) == LAYER_APPLICATION);
     assert(layer_for_kind(WINDOW_LAUNCHER) == LAYER_APPLICATION);
     assert(layer_for_kind(WINDOW_APPLICATION) <

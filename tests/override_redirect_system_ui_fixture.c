@@ -85,7 +85,7 @@ int main(void)
         {"MSYS OR Toast", "org.msys.tests.toast",
          "org.msys.tests:system-ui", "notification-presenter", 10, 52, 300, 76},
         {"MSYS OR Transition", "org.msys.tests.transition",
-         "org.msys.tests:system-ui", "transition-presenter", 0, 42, 320, 396},
+         "org.msys.tests:system-ui", "transition-presenter", 8, 50, 304, 380},
         /* These must remain invisible to policy/debug routing. */
         {"Untrusted OR Popup", "org.vendor.popup", NULL,
          "navigation-bar", 40, 100, 120, 80},

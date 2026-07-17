@@ -72,6 +72,7 @@ static void test_mobile_spi_matches_shell_workarea(void)
     struct msys_rect navigation;
     struct msys_rect application;
     struct msys_rect recents;
+    struct msys_rect shield;
     struct msys_rect requested_recents = {8, 50, 304, 380};
 
     msys_layout_resolve(&input, 320, 480, &state);
@@ -84,6 +85,8 @@ static void test_mobile_spi_matches_shell_workarea(void)
     msys_layout_place(&state, MSYS_SURFACE_APPLICATION, NULL, &application);
     msys_layout_place(&state, MSYS_SURFACE_RECENTS, &requested_recents,
             &recents);
+    msys_layout_place(&state, MSYS_SURFACE_SHIELD, &requested_recents,
+            &shield);
     assert(chrome.x == 0 && chrome.y == 0 && chrome.width == 320 &&
             chrome.height == 42);
     assert(navigation.x == 0 && navigation.y == 438 &&
@@ -92,6 +95,10 @@ static void test_mobile_spi_matches_shell_workarea(void)
     /* Mobile ignores a stale desktop-sized request: Overview must cover the
      * complete application workarea so no underlying toolkit gutter leaks. */
     assert(memcmp(&recents, &state.workarea, sizeof(recents)) == 0);
+    /* A transition uses the RECENTS placement above; only an actual screen
+     * shield may cover the reserved chrome and navigation bars. */
+    assert(shield.x == 0 && shield.y == 0 && shield.width == 320 &&
+            shield.height == 480);
 }
 
 static void test_mobile_landscape_moves_navigation_to_right_edge(void)
@@ -222,6 +229,43 @@ static void test_mobile_recents_owns_the_complete_workarea(void)
     assert(recents.x > state.workarea.x && recents.y > state.workarea.y);
 }
 
+static void test_transition_always_owns_the_exact_workarea(void)
+{
+    static const struct {
+        const char *profile;
+        const char *orientation;
+        int width;
+        int height;
+    } cases[] = {
+        {"mobile", "portrait", 320, 480},
+        {"mobile", "landscape", 800, 480},
+        {"desktop", "portrait", 320, 480},
+        {"desktop", "landscape", 1920, 1080},
+        {"kiosk", "portrait", 320, 480}
+    };
+    struct msys_rect requested = {8, 50, 304, 380};
+    size_t index;
+
+    for (index = 0; index < sizeof(cases) / sizeof(cases[0]); index++) {
+        struct msys_layout_config input = config(cases[index].profile,
+                cases[index].orientation, "auto");
+        struct msys_layout_state state;
+        struct msys_rect transition;
+        struct msys_rect shield;
+
+        msys_layout_resolve(&input, cases[index].width,
+                cases[index].height, &state);
+        msys_layout_place(&state, MSYS_SURFACE_TRANSITION, &requested,
+                &transition);
+        msys_layout_place(&state, MSYS_SURFACE_SHIELD, &requested, &shield);
+        assert(memcmp(&transition, &state.workarea,
+                    sizeof(transition)) == 0);
+        assert(shield.x == 0 && shield.y == 0);
+        assert(shield.width == cases[index].width &&
+                shield.height == cases[index].height);
+    }
+}
+
 static void test_input_method_is_bounded_to_workarea(void)
 {
     struct msys_layout_config input = config("mobile", "portrait", "auto");
@@ -295,6 +339,7 @@ int main(void)
     test_desktop_spi_uses_shell_sized_system_bars();
     test_mobile_input_method_preserves_floating_geometry();
     test_mobile_recents_owns_the_complete_workarea();
+    test_transition_always_owns_the_exact_workarea();
     test_input_method_is_bounded_to_workarea();
     test_explicit_insets_are_clamped_to_a_valid_workarea();
     test_explicit_edge_selects_compatible_navigation();

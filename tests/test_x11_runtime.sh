@@ -105,6 +105,17 @@ case "$desktop" in
     *) echo "unexpected desktop layout: $desktop" >&2; exit 1 ;;
 esac
 
+# Reproduce the physical SPI session before mapping the contracted LVGL
+# system surfaces.  This catches a transition accidentally classified as a
+# full-screen shield instead of a workarea overlay.
+MSYS_DEBUG_LAYOUT=1 $BIN --debug-root-size 320 480
+$BIN --set-layout mobile portrait 42,0,42,0
+mobile_spi=$(wait_layout "profile=mobile;orientation_policy=portrait;insets_policy=42,0,42,0;orientation=portrait;screen=320,480")
+case "$mobile_spi" in
+    *"workarea=0,42,320,396;navigation=bottom;navigation_region=0,438,320,42"*) ;;
+    *) echo "unexpected mobile SPI layout: $mobile_spi" >&2; exit 1 ;;
+esac
+
 # LVGL system surfaces are intentionally override-redirect, but publish an
 # explicit role and owning component on each mapped top level.  They must be
 # visible to native list-windows and be routable by the exact app identity.
@@ -139,6 +150,19 @@ do
         *) echo "override-redirect system UI missing $expected: $windows" >&2; exit 1 ;;
     esac
 done
+i=0
+while [ "$i" -lt 50 ]; do
+    windows=$($BIN --list-windows 2>/dev/null || true)
+    case "$windows" in
+        *'"title":"MSYS OR Transition"'*'"role":"transition-presenter"'*'"geometry":{"x":0,"y":42,"width":320,"height":396}'*) break ;;
+    esac
+    i=$((i + 1))
+    sleep 0.05
+done
+case "$windows" in
+    *'"title":"MSYS OR Transition"'*'"role":"transition-presenter"'*'"geometry":{"x":0,"y":42,"width":320,"height":396}'*) ;;
+    *) echo "transition presenter escaped workarea: $windows" >&2; exit 1 ;;
+esac
 case "$windows" in
     *'"title":"Untrusted OR Popup"'*|*'"title":"Untrusted OR Tooltip"'*)
         echo "untrusted override-redirect popup entered window policy: $windows" >&2
@@ -181,6 +205,16 @@ if [ -z "$swipe_dwell_ms" ] || [ -z "$drag_dwell_ms" ] ||
     exit 1
 fi
 echo "debug gesture dwell: swipe=${swipe_dwell_ms}ms drag=${drag_dwell_ms}ms"
+
+# The remaining window-action probes exercise desktop placement against the
+# real Xvfb root, so undo the temporary SPI-sized layout simulation.
+MSYS_DEBUG_LAYOUT=1 $BIN --debug-root-size 800 800
+$BIN --set-layout desktop auto 10,20,30,40
+desktop=$(wait_layout "profile=desktop;orientation_policy=auto;insets_policy=10,20,30,40;orientation=portrait;screen=800,800")
+case "$desktop" in
+    *"workarea=40,10,740,760;navigation=bottom;navigation_region=40,770,740,30"*) ;;
+    *) echo "desktop layout was not restored: $desktop" >&2; exit 1 ;;
+esac
 
 xmessage -title MSYS-Window-Fixture -timeout 30 fixture >"$TMP/fixture.log" 2>&1 &
 fixture_pid=$!

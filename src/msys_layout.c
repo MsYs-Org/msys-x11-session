@@ -413,6 +413,12 @@ void msys_layout_place(const struct msys_layout_state *state,
             result->width = available.width;
         center_rect(&available, result);
         break;
+    case MSYS_SURFACE_TRANSITION:
+        /* A launch mask follows the application coordinate space exactly in
+         * every profile.  It must not inherit Overview's desktop gap or a
+         * shield's root-sized geometry. */
+        *result = state->workarea;
+        break;
     case MSYS_SURFACE_SHIELD:
         result->x = 0;
         result->y = 0;

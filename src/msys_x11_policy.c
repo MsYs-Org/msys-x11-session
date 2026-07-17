@@ -34,7 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
-#define MSYS_X11_POLICY_VERSION "0.2.21"
+#define MSYS_X11_POLICY_VERSION "0.2.22"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -998,7 +998,11 @@ static enum msys_surface_kind surface_for_window_kind(enum window_kind kind)
     case WINDOW_CHOOSER:
         return MSYS_SURFACE_CHOOSER;
     case WINDOW_TRANSITION:
-        return MSYS_SURFACE_SHIELD;
+        /* Launch transitions cover only the application workarea.  Keeping
+         * the system chrome and navigation outside this surface also keeps
+         * the presenter's LVGL coordinates aligned with its requested
+         * workarea-sized X11 top level. */
+        return MSYS_SURFACE_TRANSITION;
     case WINDOW_SHIELD:
         return MSYS_SURFACE_SHIELD;
     case WINDOW_LAUNCHER:
