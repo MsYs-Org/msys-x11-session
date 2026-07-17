@@ -146,10 +146,12 @@ case "$windows" in
         ;;
 esac
 
-# Click and XTEST swipe must resolve the same override-redirect navigation
-# top level.  The fixture exits only after it receives press/release/motion.
+# Click and XTEST gestures must resolve the same override-redirect navigation
+# top level.  Swipe starts moving immediately; drag holds long enough to
+# exercise a toolkit long-press before its first motion.
 $BIN --debug-click-identity org.msys.tests.navigation 20 20
 $BIN --debug-swipe-identity org.msys.tests.navigation 20 20 100 20 80
+$BIN --debug-drag-identity org.msys.tests.navigation 20 20 100 20 80
 i=0
 while kill -0 "$system_ui_fixture_pid" 2>/dev/null && [ "$i" -lt 50 ]; do
     i=$((i + 1))
@@ -162,10 +164,23 @@ if kill -0 "$system_ui_fixture_pid" 2>/dev/null; then
 fi
 wait "$system_ui_fixture_pid"
 system_ui_fixture_pid=
-case "$(cat "$TMP/system-ui-fixture.log")" in
-    *'events press='*' release='*' motion='*) ;;
+gesture_events=$(cat "$TMP/system-ui-fixture.log")
+case "$gesture_events" in
+    *'events press='*' release='*' motion='*' swipe_dwell_ms='*' drag_dwell_ms='*) ;;
     *) echo "system UI fixture did not observe injected events" >&2; exit 1 ;;
 esac
+swipe_dwell_ms=$(printf '%s\n' "$gesture_events" | sed -n \
+    's/.*swipe_dwell_ms=\([0-9][0-9]*\).*/\1/p')
+drag_dwell_ms=$(printf '%s\n' "$gesture_events" | sed -n \
+    's/.*drag_dwell_ms=\([0-9][0-9]*\).*/\1/p')
+if [ -z "$swipe_dwell_ms" ] || [ -z "$drag_dwell_ms" ] ||
+        [ "$swipe_dwell_ms" -ge 400 ] || [ "$drag_dwell_ms" -lt 500 ] ||
+        [ "$drag_dwell_ms" -gt 2000 ] ||
+        [ $((drag_dwell_ms - swipe_dwell_ms)) -lt 400 ]; then
+    echo "unexpected debug gesture dwell: $gesture_events" >&2
+    exit 1
+fi
+echo "debug gesture dwell: swipe=${swipe_dwell_ms}ms drag=${drag_dwell_ms}ms"
 
 xmessage -title MSYS-Window-Fixture -timeout 30 fixture >"$TMP/fixture.log" 2>&1 &
 fixture_pid=$!

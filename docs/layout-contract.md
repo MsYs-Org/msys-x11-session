@@ -125,7 +125,9 @@ DISPLAY=:24 bin/msys-x11-policy \
 The helper dynamically verifies XTEST, moves to the start point, presses
 button 1, emits roughly 16 ms interpolated motion frames, and always releases.
 `--debug-swipe-title` is available for identity-less legacy windows;
-`--debug-drag-{identity,title,window}` are exact aliases.
+`--debug-drag-{identity,title,window}` hold button 1 for 650 milliseconds
+before the first motion so long-press interactions can be tested, while the
+corresponding `--debug-swipe-*` forms begin moving immediately.
 
 Equivalent window-policy mIPC calls:
 

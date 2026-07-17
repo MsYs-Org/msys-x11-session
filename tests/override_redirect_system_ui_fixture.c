@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 struct fixture_window {
@@ -61,6 +62,13 @@ static Window create_fixture_window(Display *display, Window root,
     return window;
 }
 
+static long long elapsed_milliseconds(const struct timespec *start,
+        const struct timespec *end)
+{
+    return (long long)(end->tv_sec - start->tv_sec) * 1000 +
+        (end->tv_nsec - start->tv_nsec) / (1000 * 1000);
+}
+
 int main(void)
 {
     static const struct fixture_window fixtures[] = {
@@ -90,6 +98,9 @@ int main(void)
     unsigned int pressed = 0;
     unsigned int released = 0;
     unsigned int moved = 0;
+    int pointer_down = 0;
+    struct timespec press_time = {0};
+    long long dwell_ms[4] = {-1, -1, -1, -1};
 
     if (!display) {
         fputs("override redirect fixture: cannot open DISPLAY\n", stderr);
@@ -102,18 +113,33 @@ int main(void)
     puts("ready");
     fflush(stdout);
 
-    while (pressed < 2 || released < 2 || moved == 0) {
+    while (pressed < 3 || released < 3 || dwell_ms[2] < 0 ||
+            dwell_ms[3] < 0) {
         XEvent event;
 
         XNextEvent(display, &event);
-        if (event.type == ButtonPress)
+        if (event.type == ButtonPress) {
             pressed++;
-        else if (event.type == ButtonRelease)
+            pointer_down = 1;
+            clock_gettime(CLOCK_MONOTONIC, &press_time);
+        } else if (event.type == ButtonRelease) {
             released++;
-        else if (event.type == MotionNotify)
+            pointer_down = 0;
+        } else if (event.type == MotionNotify) {
+            struct timespec motion_time;
+
             moved++;
+            if (pointer_down && pressed >= 2 && pressed <= 3 &&
+                    dwell_ms[pressed] < 0) {
+                clock_gettime(CLOCK_MONOTONIC, &motion_time);
+                dwell_ms[pressed] = elapsed_milliseconds(&press_time,
+                        &motion_time);
+            }
+        }
     }
-    printf("events press=%u release=%u motion=%u\n", pressed, released, moved);
+    printf("events press=%u release=%u motion=%u swipe_dwell_ms=%lld "
+            "drag_dwell_ms=%lld\n", pressed, released, moved, dwell_ms[2],
+            dwell_ms[3]);
     fflush(stdout);
     XCloseDisplay(display);
     return 0;
