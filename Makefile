@@ -18,8 +18,9 @@ TEST_TARGET := $(BIN_DIR)/test-policy-logic
 LAYOUT_TEST_TARGET := $(BIN_DIR)/test-layout
 AGENT_TEST_TARGET := $(BIN_DIR)/test-native-agent
 THUMBNAIL_FIXTURE_TARGET := $(BIN_DIR)/thumbnail-late-render-fixture
+SYSTEM_UI_FIXTURE_TARGET := $(BIN_DIR)/override-redirect-system-ui-fixture
 PACKAGE_ID := org.msys.x11.session
-PACKAGE_VERSION := 0.2.17
+PACKAGE_VERSION := 0.2.18
 PACKAGE_ARCHIVE := dist/$(PACKAGE_ID)-$(PACKAGE_VERSION).tar.gz
 
 .PHONY: all native-test python-test test strict integration-test publisher-test \
@@ -78,7 +79,12 @@ $(THUMBNAIL_FIXTURE_TARGET): tests/thumbnail_late_render_fixture.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/thumbnail_late_render_fixture.c \
 		$(LDFLAGS) -lX11 -o $@
 
-integration-test: $(TARGET) $(THUMBNAIL_FIXTURE_TARGET)
+$(SYSTEM_UI_FIXTURE_TARGET): tests/override_redirect_system_ui_fixture.c
+	mkdir -p $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/override_redirect_system_ui_fixture.c \
+		$(LDFLAGS) -lX11 -o $@
+
+integration-test: $(TARGET) $(THUMBNAIL_FIXTURE_TARGET) $(SYSTEM_UI_FIXTURE_TARGET)
 	tests/test_x11_runtime.sh
 
 publisher-test: $(TARGET)
@@ -103,5 +109,5 @@ package-test: package
 
 clean:
 	rm -f $(TARGET) $(TEST_TARGET) $(LAYOUT_TEST_TARGET) $(AGENT_TEST_TARGET) \
-		$(THUMBNAIL_FIXTURE_TARGET)
+		$(THUMBNAIL_FIXTURE_TARGET) $(SYSTEM_UI_FIXTURE_TARGET)
 	rm -rf build

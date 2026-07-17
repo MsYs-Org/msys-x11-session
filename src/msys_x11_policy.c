@@ -34,7 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
-#define MSYS_X11_POLICY_VERSION "0.2.17"
+#define MSYS_X11_POLICY_VERSION "0.2.18"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -136,6 +136,7 @@ enum window_kind {
     WINDOW_LAUNCHER,
     WINDOW_INPUT_METHOD,
     WINDOW_RECENTS,
+    WINDOW_QUICK_CONTROLS,
     WINDOW_CHOOSER,
     WINDOW_NOTIFICATION,
     WINDOW_CHROME,
@@ -173,6 +174,8 @@ struct window_metadata {
     char *process_component_id;
     char *declared_identity;
     char *role;
+    int has_msys_component_id;
+    int has_msys_window_role;
 };
 
 struct identity_rule {
@@ -195,6 +198,7 @@ static const struct identity_rule default_identity_rules[] = {
     {"org.msys.input.touch", WINDOW_INPUT_METHOD},
     {"org.msys.shell.task-switcher", WINDOW_RECENTS},
     {"org.msys.shell.notification-center", WINDOW_RECENTS},
+    {"org.msys.shell.native.quick-controls", WINDOW_QUICK_CONTROLS},
     {"org.msys.shell.intent-chooser", WINDOW_CHOOSER},
     {"org.msys.shell.notifications", WINDOW_NOTIFICATION},
     {"org.msys.shell.system-chrome", WINDOW_CHROME},
@@ -436,8 +440,10 @@ static void load_window_metadata(Display *display, Window window,
                 "_KDE_NET_WM_DESKTOP_FILE");
     metadata->component_id = window_property_string(display, window,
             "_MSYS_COMPONENT_ID");
+    metadata->has_msys_component_id = metadata->component_id != NULL;
     metadata->role = window_property_string(display, window,
             "_MSYS_WINDOW_ROLE");
+    metadata->has_msys_window_role = metadata->role != NULL;
     if (!metadata->role)
         metadata->role = window_property_string(display, window,
                 "WM_WINDOW_ROLE");
@@ -534,6 +540,8 @@ static int role_kind(const char *role, enum window_kind *kind)
     else if (text_equal(role, "task-switcher") || text_equal(role, "recents") ||
             text_equal(role, "notification-center"))
         *kind = WINDOW_RECENTS;
+    else if (text_equal(role, "quick-controls"))
+        *kind = WINDOW_QUICK_CONTROLS;
     else if (text_equal(role, "chooser") || text_equal(role, "intent-chooser") ||
             text_equal(role, "dialog"))
         *kind = WINDOW_CHOOSER;
@@ -607,6 +615,7 @@ static const char *window_kind_name(enum window_kind kind)
     case WINDOW_INPUT_METHOD:
         return "overlay";
     case WINDOW_RECENTS:
+    case WINDOW_QUICK_CONTROLS:
         return "overlay";
     case WINDOW_CHOOSER:
         return "overlay";
@@ -628,7 +637,44 @@ static const char *window_kind_name(enum window_kind kind)
 
 static int window_kind_allows_override_redirect(enum window_kind kind)
 {
-    return kind == WINDOW_INPUT_METHOD;
+    return kind == WINDOW_INPUT_METHOD || kind == WINDOW_RECENTS ||
+        kind == WINDOW_QUICK_CONTROLS || kind == WINDOW_NOTIFICATION ||
+        kind == WINDOW_CHROME || kind == WINDOW_NAVIGATION;
+}
+
+/*
+ * Override-redirect is also used by ordinary toolkit menus, tooltips and
+ * transient popups.  Do not infer system ownership from a title, WM_CLASS,
+ * process environment, or even a role property alone.  Native MSYS system UI
+ * is eligible only when the client publishes both halves of the top-level X11
+ * contract directly on that window.  This is the contract used by the LVGL
+ * runtime and remains replaceable because the component value is not pinned
+ * to a built-in package identity.
+ */
+static int window_metadata_allows_override_redirect(
+        const struct window_metadata *metadata, enum window_kind kind)
+{
+    const char *role;
+
+    /* Preserve the established input-method overlay contract. */
+    if (kind == WINDOW_INPUT_METHOD)
+        return 1;
+    if (!window_kind_allows_override_redirect(kind))
+        return 0;
+    if (!metadata || !metadata->has_msys_window_role ||
+            !metadata->has_msys_component_id || !metadata->role ||
+            !*metadata->role || !metadata->component_id ||
+            !*metadata->component_id)
+        return 0;
+    role = metadata->role;
+    if (strncasecmp(role, "role:", 5) == 0)
+        role += 5;
+    return text_equal(role, "navigation-bar") ||
+        text_equal(role, "system-chrome") ||
+        text_equal(role, "task-switcher") ||
+        text_equal(role, "notification-center") ||
+        text_equal(role, "quick-controls") ||
+        text_equal(role, "notification-presenter");
 }
 
 static const char *explicit_role_name(const char *role)
@@ -648,6 +694,8 @@ static const char *explicit_role_name(const char *role)
         return "task-switcher";
     if (text_equal(role, "notification-center"))
         return "notification-center";
+    if (text_equal(role, "quick-controls"))
+        return "quick-controls";
     if (text_equal(role, "chooser") || text_equal(role, "intent-chooser") ||
             text_equal(role, "dialog"))
         return "chooser";
@@ -683,6 +731,9 @@ static const char *stable_identity_role_name(
     if (metadata_matches_identity(metadata,
                 "org.msys.shell.notification-center"))
         return "notification-center";
+    if (metadata_matches_identity(metadata,
+                "org.msys.shell.native.quick-controls"))
+        return "quick-controls";
     if (metadata_matches_identity(metadata, "org.msys.shell.intent-chooser"))
         return "chooser";
     if (metadata_matches_identity(metadata, "org.msys.shell.notifications"))
@@ -745,6 +796,8 @@ static const char *canonical_window_role(
         return "input-method";
     case WINDOW_RECENTS:
         return "task-switcher";
+    case WINDOW_QUICK_CONTROLS:
+        return "quick-controls";
     case WINDOW_CHOOSER:
         return "chooser";
     case WINDOW_NOTIFICATION:
@@ -885,9 +938,11 @@ static Window resolve_window_id(Display *display, Window root,
 
         load_window_metadata(display, target, &metadata);
         kind = classify_window(&metadata);
-        free_window_metadata(&metadata);
-        if (!window_kind_allows_override_redirect(kind))
+        if (!window_metadata_allows_override_redirect(&metadata, kind)) {
+            free_window_metadata(&metadata);
             return None;
+        }
+        free_window_metadata(&metadata);
     }
     actual = window_property_string(display, target, WINDOW_ID_PROPERTY);
     if (!actual || strcmp(actual, window_id) != 0)
@@ -902,6 +957,7 @@ static enum window_layer layer_for_kind(enum window_kind kind)
     case WINDOW_INPUT_METHOD:
         return LAYER_INPUT_METHOD;
     case WINDOW_RECENTS:
+    case WINDOW_QUICK_CONTROLS:
         return LAYER_RECENTS;
     case WINDOW_CHOOSER:
         return LAYER_CHOOSER;
@@ -934,6 +990,7 @@ static enum msys_surface_kind surface_for_window_kind(enum window_kind kind)
     case WINDOW_NOTIFICATION:
         return MSYS_SURFACE_NOTIFICATION;
     case WINDOW_RECENTS:
+    case WINDOW_QUICK_CONTROLS:
         return MSYS_SURFACE_RECENTS;
     case WINDOW_CHOOSER:
         return MSYS_SURFACE_CHOOSER;
@@ -1117,7 +1174,7 @@ static void layout_window(Display *display, Window window,
     load_window_metadata(display, window, &metadata);
     kind = classify_window(&metadata);
     if (attributes.override_redirect &&
-            !window_kind_allows_override_redirect(kind)) {
+            !window_metadata_allows_override_redirect(&metadata, kind)) {
         free_window_metadata(&metadata);
         return;
     }
@@ -1283,9 +1340,11 @@ static void watch_window_metadata(Display *display, Window window)
 
         load_window_metadata(display, window, &metadata);
         kind = classify_window(&metadata);
-        free_window_metadata(&metadata);
-        if (!window_kind_allows_override_redirect(kind))
+        if (!window_metadata_allows_override_redirect(&metadata, kind)) {
+            free_window_metadata(&metadata);
             return;
+        }
+        free_window_metadata(&metadata);
     }
     /* Event selections are per X client, so this does not replace the
      * application's own mask. */
@@ -1345,7 +1404,7 @@ static void raise_system_overlays(Display *display, Window root)
         load_window_metadata(display, children[i], &metadata);
         kind = classify_window(&metadata);
         if (attributes.override_redirect &&
-                !window_kind_allows_override_redirect(kind)) {
+                !window_metadata_allows_override_redirect(&metadata, kind)) {
             free_window_metadata(&metadata);
             continue;
         }
@@ -1494,7 +1553,7 @@ static Window find_window(Display *display, Window root, const char *identity,
                 continue;
             load_window_metadata(display, children[i - 1], &metadata);
             if (attributes.override_redirect &&
-                    !window_kind_allows_override_redirect(
+                    !window_metadata_allows_override_redirect(&metadata,
                         classify_window(&metadata))) {
                 free_window_metadata(&metadata);
                 continue;
@@ -1518,7 +1577,7 @@ static Window find_window(Display *display, Window root, const char *identity,
                 continue;
             load_window_metadata(display, children[i - 1], &metadata);
             if (attributes.override_redirect &&
-                    !window_kind_allows_override_redirect(
+                    !window_metadata_allows_override_redirect(&metadata,
                         classify_window(&metadata))) {
                 free_window_metadata(&metadata);
                 continue;
@@ -1907,6 +1966,9 @@ static int thumbnail_window_is_unobscured(Display *display, Window root,
             continue;
         load_window_metadata(display, children[i], &metadata);
         kind = classify_window(&metadata);
+        if (attributes.override_redirect &&
+                !window_metadata_allows_override_redirect(&metadata, kind))
+            kind = WINDOW_APPLICATION;
         free_window_metadata(&metadata);
         /* Overview must freeze every task cache, even if a replacement shell
          * uses a card-sized rather than full-screen task-switcher surface. */
@@ -2028,7 +2090,7 @@ static int mapped_task_switcher_exists(Display *display, Window *children,
         load_window_metadata(display, children[i], &metadata);
         kind = classify_window(&metadata);
         if (attributes.override_redirect &&
-                !window_kind_allows_override_redirect(kind)) {
+                !window_metadata_allows_override_redirect(&metadata, kind)) {
             free_window_metadata(&metadata);
             continue;
         }
@@ -2087,7 +2149,7 @@ static int write_windows_json(FILE *stream, const char *display_name)
         load_window_metadata(display, window, &metadata);
         kind = classify_window(&metadata);
         if (attributes.override_redirect &&
-                !window_kind_allows_override_redirect(kind)) {
+                !window_metadata_allows_override_redirect(&metadata, kind)) {
             free_window_metadata(&metadata);
             continue;
         }
@@ -2234,7 +2296,7 @@ int msys_x11_policy_top_window(const char *display_name,
         load_window_metadata(display, window, &metadata);
         kind = classify_window(&metadata);
         if (attributes.override_redirect &&
-                !window_kind_allows_override_redirect(kind)) {
+                !window_metadata_allows_override_redirect(&metadata, kind)) {
             free_window_metadata(&metadata);
             continue;
         }

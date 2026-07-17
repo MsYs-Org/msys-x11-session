@@ -11,6 +11,7 @@ done
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BIN="$ROOT/bin/msys-x11-policy"
 THUMBNAIL_FIXTURE="$ROOT/bin/thumbnail-late-render-fixture"
+SYSTEM_UI_FIXTURE="$ROOT/bin/override-redirect-system-ui-fixture"
 DISPLAY_NUMBER=${MSYS_TEST_DISPLAY_NUMBER:-97}
 export DISPLAY=":$DISPLAY_NUMBER"
 TMP=$(mktemp -d)
@@ -24,6 +25,7 @@ launcher_guard_pid=
 late_fixture_pid=
 thumbnail_fixture_pid=
 thumbnail_cover_pid=
+system_ui_fixture_pid=
 
 cleanup() {
     if [ -n "$policy_pid" ]; then
@@ -46,6 +48,9 @@ cleanup() {
     fi
     if [ -n "$thumbnail_cover_pid" ]; then
         kill "$thumbnail_cover_pid" 2>/dev/null || true
+    fi
+    if [ -n "$system_ui_fixture_pid" ]; then
+        kill "$system_ui_fixture_pid" 2>/dev/null || true
     fi
     if [ -n "$xvfb_pid" ]; then
         kill "$xvfb_pid" 2>/dev/null || true
@@ -98,6 +103,66 @@ desktop=$(wait_layout "profile=desktop;orientation_policy=auto;insets_policy=10,
 case "$desktop" in
     *"workarea=40,10,740,760;navigation=bottom;navigation_region=40,770,740,30"*) ;;
     *) echo "unexpected desktop layout: $desktop" >&2; exit 1 ;;
+esac
+
+# LVGL system surfaces are intentionally override-redirect, but publish an
+# explicit role and owning component on each mapped top level.  They must be
+# visible to native list-windows and be routable by the exact app identity.
+# A generic popup with only one half of the contract must remain excluded.
+"$SYSTEM_UI_FIXTURE" >"$TMP/system-ui-fixture.log" 2>&1 &
+system_ui_fixture_pid=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    windows=$($BIN --list-windows 2>/dev/null || true)
+    case "$windows" in
+        *'"title":"MSYS OR Navigation"'*'"identity":"org.msys.tests.navigation","component":"org.msys.tests:system-ui","role":"navigation-bar","kind":"system-ui","state":"visible"'*) break ;;
+    esac
+    i=$((i + 1))
+    sleep 0.05
+done
+for expected in \
+    '"title":"MSYS OR Chrome"' \
+    '"role":"system-chrome"' \
+    '"title":"MSYS OR Tasks"' \
+    '"role":"task-switcher"' \
+    '"title":"MSYS OR Notifications"' \
+    '"role":"notification-center"' \
+    '"title":"MSYS OR Controls"' \
+    '"role":"quick-controls"' \
+    '"title":"MSYS OR Toast"' \
+    '"role":"notification-presenter"'
+do
+    case "$windows" in
+        *"$expected"*) ;;
+        *) echo "override-redirect system UI missing $expected: $windows" >&2; exit 1 ;;
+    esac
+done
+case "$windows" in
+    *'"title":"Untrusted OR Popup"'*|*'"title":"Untrusted OR Tooltip"'*)
+        echo "untrusted override-redirect popup entered window policy: $windows" >&2
+        exit 1
+        ;;
+esac
+
+# Click and XTEST swipe must resolve the same override-redirect navigation
+# top level.  The fixture exits only after it receives press/release/motion.
+$BIN --debug-click-identity org.msys.tests.navigation 20 20
+$BIN --debug-swipe-identity org.msys.tests.navigation 20 20 100 20 80
+i=0
+while kill -0 "$system_ui_fixture_pid" 2>/dev/null && [ "$i" -lt 50 ]; do
+    i=$((i + 1))
+    sleep 0.05
+done
+if kill -0 "$system_ui_fixture_pid" 2>/dev/null; then
+    echo "debug click/swipe did not hit override-redirect system UI" >&2
+    cat "$TMP/system-ui-fixture.log" >&2
+    exit 1
+fi
+wait "$system_ui_fixture_pid"
+system_ui_fixture_pid=
+case "$(cat "$TMP/system-ui-fixture.log")" in
+    *'events press='*' release='*' motion='*) ;;
+    *) echo "system UI fixture did not observe injected events" >&2; exit 1 ;;
 esac
 
 xmessage -title MSYS-Window-Fixture -timeout 30 fixture >"$TMP/fixture.log" 2>&1 &

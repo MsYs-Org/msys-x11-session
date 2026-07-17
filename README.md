@@ -80,8 +80,13 @@ Replaceable virtual keyboards publish `MSYS_WINDOW_ROLE=input-method` (the
 `soft-keyboard` aliases are accepted). The stock `org.msys.input.touch`
 identity is recognized directly; vendors that cannot publish a role can use
 the comma-separated `MSYS_X11_INPUT_METHOD_IDENTITIES` compatibility setting.
-Only a window classified this way may enter policy as `override_redirect`, so
-ordinary toolkit menus and tooltips remain unmanaged.
+Input-method remains the compatibility exception for `override_redirect`.
+Native system UI may also use it when the same top-level window publishes both
+`_MSYS_WINDOW_ROLE` and `_MSYS_COMPONENT_ID`, and the role is one of
+`navigation-bar`, `system-chrome`, `task-switcher`, `notification-center`,
+`quick-controls`, or `notification-presenter`. Requiring both explicit X11
+properties keeps ordinary toolkit menus and tooltips unmanaged; titles,
+WM_CLASS, and process-environment inference are not sufficient.
 
 Native compilation is an explicit development/package step. No provider or
 agent invokes `make`, `cc`, or a target package manager at runtime:
@@ -89,7 +94,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.17.tar.gz
+make package             # dist/org.msys.x11.session-0.2.18.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 

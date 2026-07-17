@@ -107,6 +107,28 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertNotIn('execlp("xdotool', source)
         self.assertIn("-ldl", (ROOT / "Makefile").read_text(encoding="utf-8"))
 
+    def test_override_redirect_system_ui_requires_role_and_component_properties(self) -> None:
+        policy = (ROOT / "src" / "msys_x11_policy.c").read_text(
+            encoding="utf-8"
+        )
+        allow = policy[
+            policy.index("static int window_metadata_allows_override_redirect"):
+            policy.index("static const char *explicit_role_name")
+        ]
+        self.assertIn("has_msys_window_role", allow)
+        self.assertIn("has_msys_component_id", allow)
+        for role in (
+            "navigation-bar",
+            "system-chrome",
+            "task-switcher",
+            "notification-center",
+            "quick-controls",
+            "notification-presenter",
+        ):
+            self.assertIn(f'role, "{role}"', allow)
+        self.assertNotIn("metadata->title", allow)
+        self.assertNotIn("metadata->wm_class", allow)
+
     def test_home_snapshot_precedes_launcher_and_obscured_tasks_keep_cache(self) -> None:
         agent = (ROOT / "src" / "msys_x11_agent.c").read_text(encoding="utf-8")
         policy = (ROOT / "src" / "msys_x11_policy.c").read_text(encoding="utf-8")

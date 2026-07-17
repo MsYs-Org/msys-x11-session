@@ -322,7 +322,7 @@ static void test_truncated_environment_entry_is_rejected(void)
 static void test_layer_order(void)
 {
     assert(!window_kind_allows_override_redirect(WINDOW_APPLICATION));
-    assert(!window_kind_allows_override_redirect(WINDOW_NOTIFICATION));
+    assert(window_kind_allows_override_redirect(WINDOW_NOTIFICATION));
     assert(window_kind_allows_override_redirect(WINDOW_INPUT_METHOD));
     assert(surface_for_window_kind(WINDOW_INPUT_METHOD) ==
             MSYS_SURFACE_INPUT_METHOD);
@@ -337,6 +337,58 @@ static void test_layer_order(void)
     assert(layer_for_kind(WINDOW_CHROME) < layer_for_kind(WINDOW_NAVIGATION));
     assert(layer_for_kind(WINDOW_NAVIGATION) < layer_for_kind(WINDOW_TRANSITION));
     assert(layer_for_kind(WINDOW_TRANSITION) < layer_for_kind(WINDOW_SHIELD));
+}
+
+static void test_override_redirect_system_ui_requires_explicit_contract(void)
+{
+    static const char *roles[] = {
+        "navigation-bar",
+        "system-chrome",
+        "task-switcher",
+        "notification-center",
+        "quick-controls",
+        "notification-presenter"
+    };
+    struct window_metadata value = metadata("Vendor popup",
+            "VendorToolkit", "org.vendor.shell", "org.vendor.shell:ui",
+            "navigation-bar");
+    size_t index;
+
+    /* Values inferred from title, WM_CLASS, /proc environ, or a single X11
+     * property do not turn a toolkit popup into trusted system UI. */
+    assert(!window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.has_msys_window_role = 1;
+    assert(!window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.has_msys_component_id = 1;
+    for (index = 0; index < sizeof(roles) / sizeof(roles[0]); index++) {
+        value.role = (char *)roles[index];
+        assert(window_metadata_allows_override_redirect(&value,
+                    classify_window(&value)));
+    }
+    value.role = "role:navigation-bar";
+    assert(window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.role = "role:quick-controls";
+    assert(window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.role = "application";
+    assert(!window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.role = "screen-shield";
+    assert(!window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.role = "navigation-bar";
+    value.component_id = "";
+    assert(!window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
+    value.role = "input-method";
+    value.component_id = "org.vendor.shell:ui";
+    value.has_msys_component_id = 0;
+    value.has_msys_window_role = 0;
+    assert(window_metadata_allows_override_redirect(&value,
+                classify_window(&value)));
 }
 
 static void test_debug_coordinates_are_strict(void)
@@ -681,6 +733,7 @@ int main(void)
     test_bounded_process_environment_extraction();
     test_truncated_environment_entry_is_rejected();
     test_layer_order();
+    test_override_redirect_system_ui_requires_explicit_contract();
     test_debug_coordinates_are_strict();
     test_debug_gesture_contract_is_strict_and_interpolated();
     test_debug_gesture_closes_display_before_unloading_xtest();
