@@ -1,6 +1,6 @@
 [project]
 name = "msys-x11-session"
-version = "0.2.19"
+version = "0.2.20"
 description = "Self-contained native X11 policy and display-session providers for MSYS"
 requires-python = ">=3.10"
 dependencies = []

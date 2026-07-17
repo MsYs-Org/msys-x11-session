@@ -130,7 +130,9 @@ for expected in \
     '"title":"MSYS OR Controls"' \
     '"role":"quick-controls"' \
     '"title":"MSYS OR Toast"' \
-    '"role":"notification-presenter"'
+    '"role":"notification-presenter"' \
+    '"title":"MSYS OR Transition"' \
+    '"role":"transition-presenter"'
 do
     case "$windows" in
         *"$expected"*) ;;

@@ -34,7 +34,7 @@ static int wm_conflict;
 #define MAX_IDENTITY_BYTES 256U
 #define MAX_DEBUG_TITLE_BYTES 1024U
 #define MAX_WINDOW_PID (1UL << 30)
-#define MSYS_X11_POLICY_VERSION "0.2.19"
+#define MSYS_X11_POLICY_VERSION "0.2.20"
 #define LAYOUT_CONFIG_PROPERTY "_MSYS_LAYOUT_CONFIG_V1"
 #define LAYOUT_EFFECTIVE_PROPERTY "_MSYS_LAYOUT_EFFECTIVE_V1"
 #define DISPLAY_LAYOUT_PROPERTY "_MSYS_DISPLAY_SESSION_LAYOUT_V1"
@@ -639,7 +639,8 @@ static int window_kind_allows_override_redirect(enum window_kind kind)
 {
     return kind == WINDOW_INPUT_METHOD || kind == WINDOW_RECENTS ||
         kind == WINDOW_QUICK_CONTROLS || kind == WINDOW_NOTIFICATION ||
-        kind == WINDOW_CHROME || kind == WINDOW_NAVIGATION;
+        kind == WINDOW_CHROME || kind == WINDOW_NAVIGATION ||
+        kind == WINDOW_TRANSITION;
 }
 
 /*
@@ -674,7 +675,8 @@ static int window_metadata_allows_override_redirect(
         text_equal(role, "task-switcher") ||
         text_equal(role, "notification-center") ||
         text_equal(role, "quick-controls") ||
-        text_equal(role, "notification-presenter");
+        text_equal(role, "notification-presenter") ||
+        text_equal(role, "transition-presenter");
 }
 
 static const char *explicit_role_name(const char *role)

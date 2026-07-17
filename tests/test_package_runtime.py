@@ -124,6 +124,7 @@ class CanonicalManifestTests(unittest.TestCase):
             "notification-center",
             "quick-controls",
             "notification-presenter",
+            "transition-presenter",
         ):
             self.assertIn(f'role, "{role}"', allow)
         self.assertNotIn("metadata->title", allow)

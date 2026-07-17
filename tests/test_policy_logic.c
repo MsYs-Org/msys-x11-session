@@ -324,6 +324,7 @@ static void test_layer_order(void)
     assert(!window_kind_allows_override_redirect(WINDOW_APPLICATION));
     assert(window_kind_allows_override_redirect(WINDOW_NOTIFICATION));
     assert(window_kind_allows_override_redirect(WINDOW_INPUT_METHOD));
+    assert(window_kind_allows_override_redirect(WINDOW_TRANSITION));
     assert(surface_for_window_kind(WINDOW_INPUT_METHOD) ==
             MSYS_SURFACE_INPUT_METHOD);
     assert(layer_for_kind(WINDOW_APPLICATION) == LAYER_APPLICATION);
@@ -347,7 +348,8 @@ static void test_override_redirect_system_ui_requires_explicit_contract(void)
         "task-switcher",
         "notification-center",
         "quick-controls",
-        "notification-presenter"
+        "notification-presenter",
+        "transition-presenter"
     };
     struct window_metadata value = metadata("Vendor popup",
             "VendorToolkit", "org.vendor.shell", "org.vendor.shell:ui",

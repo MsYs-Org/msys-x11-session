@@ -100,7 +100,7 @@ agent invokes `make`, `cc`, or a target package manager at runtime:
 ```sh
 make all                 # build bin/msys-x11-policy
 make test                # native and zero-external-PYTHONPATH Python tests
-make package             # dist/org.msys.x11.session-0.2.19.tar.gz
+make package             # dist/org.msys.x11.session-0.2.20.tar.gz
 make package-test        # extract and import-test the installed-root layout
 ```
 
